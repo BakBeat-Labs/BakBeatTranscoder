@@ -179,6 +179,10 @@ fn resolve_params(source: &MediaInfo, profile: &DeviceProfile) -> EncodeParams {
     }
 }
 
+/// Symphonia lowercases the full iTunes atom domain key.
+/// The raw MP4 key is `com.apple.iTunes:iTunSMPB`.
+const ITUNSMPB_TAG_KEY: &str = "com.apple.itunes:itunsmpb";
+
 /// Derive iTunSMPB gapless trim for AAC/M4A sources.
 ///
 /// Only applied when the source is an AAC codec in an M4A container with a
@@ -197,7 +201,7 @@ fn compute_gapless_trim(source: &MediaInfo) -> Option<GaplessTrim> {
         return None;
     }
 
-    let raw = audio.tags.get("itunsmpb")?;
+    let raw = audio.tags.get(ITUNSMPB_TAG_KEY)?;
     let smpb = gapless::parse_itunsmpb(raw)?;
 
     if smpb.trailing_padding == 0 {
@@ -254,7 +258,7 @@ mod tests {
         // dbpoweramp fixture: total_pcm_samples word is authoritative
         let mut tags = BTreeMap::new();
         tags.insert(
-            "itunsmpb".to_string(),
+            ITUNSMPB_TAG_KEY.to_string(),
             "00000000 00000840 000003C8 0000000000AE13F8".to_string(),
         );
         let source = make_aac_m4a(tags, Some(11411456));
@@ -271,7 +275,7 @@ mod tests {
         // n_frames = 2112 + 11408376 + 968 = 11411456
         let mut tags = BTreeMap::new();
         tags.insert(
-            "itunsmpb".to_string(),
+            ITUNSMPB_TAG_KEY.to_string(),
             "00000000 00000840 000003C8".to_string(),
         );
         let source = make_aac_m4a(tags, Some(11411456));
@@ -289,7 +293,7 @@ mod tests {
     fn no_trim_when_trailing_padding_zero() {
         let mut tags = BTreeMap::new();
         tags.insert(
-            "itunsmpb".to_string(),
+            ITUNSMPB_TAG_KEY.to_string(),
             "00000000 00000840 00000000 0000000000AE13F8".to_string(),
         );
         let source = make_aac_m4a(tags, Some(11411456));
@@ -300,7 +304,7 @@ mod tests {
     fn no_trim_for_non_m4a_source() {
         let mut tags = BTreeMap::new();
         tags.insert(
-            "itunsmpb".to_string(),
+            ITUNSMPB_TAG_KEY.to_string(),
             "00000000 00000840 000003C8 0000000000AE13F8".to_string(),
         );
         let source = MediaInfo::Audio(AudioInfo {
@@ -325,7 +329,7 @@ mod tests {
         // After trim with output_frames=11408376 → matches afconvert.
         let mut tags = BTreeMap::new();
         tags.insert(
-            "itunsmpb".to_string(),
+            ITUNSMPB_TAG_KEY.to_string(),
             "00000000 00000840 000003C8 0000000000AE13F8".to_string(),
         );
         let source = make_aac_m4a(tags, Some(11411456));
