@@ -66,14 +66,18 @@ pub struct TranscodeArgs {
     #[arg(short, long, conflicts_with = "codec")]
     pub profile: Option<String>,
 
-    /// Output codec for manual format selection (e.g. mp3, aac, flac).
-    /// Requires --container and usually --bitrate.
-    #[arg(long, requires = "container", conflicts_with = "profile")]
+    /// Output codec (e.g. mp3, aac, flac, vorbis, opus, alac, atrac3).
+    #[arg(long, conflicts_with = "profile")]
     pub codec: Option<String>,
 
-    /// Output container (e.g. mp3, m4a, ogg, wav).
-    #[arg(long)]
+    /// Output container (e.g. mp3, m4a, ogg, wav, oma).
+    /// Defaults to the codec value when not specified.
+    #[arg(long, conflicts_with = "profile")]
     pub container: Option<String>,
+
+    /// Output file extension. Defaults to container when not specified.
+    #[arg(long, conflicts_with = "profile")]
+    pub extension: Option<String>,
 
     /// Output bitrate in kbps (for lossy codecs)
     #[arg(long)]
@@ -86,6 +90,10 @@ pub struct TranscodeArgs {
     /// Output channel count (default: preserve source)
     #[arg(long)]
     pub channels: Option<u8>,
+
+    /// Force constant bitrate encoding (default: true for lossy codecs)
+    #[arg(long, default_value = "true")]
+    pub cbr: bool,
 
     /// Output directory (default: ./transcoded)
     #[arg(short, long, default_value = "transcoded")]
@@ -117,11 +125,14 @@ pub struct PlanArgs {
     #[arg(short, long, conflicts_with = "codec")]
     pub profile: Option<String>,
 
-    #[arg(long, requires = "container", conflicts_with = "profile")]
+    #[arg(long, conflicts_with = "profile")]
     pub codec: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "profile")]
     pub container: Option<String>,
+
+    #[arg(long, conflicts_with = "profile")]
+    pub extension: Option<String>,
 
     #[arg(long)]
     pub bitrate: Option<u32>,
@@ -131,6 +142,9 @@ pub struct PlanArgs {
 
     #[arg(long)]
     pub channels: Option<u8>,
+
+    #[arg(long, default_value = "true")]
+    pub cbr: bool,
 
     #[arg(short, long, default_value = "transcoded")]
     pub output: PathBuf,

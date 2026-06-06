@@ -62,8 +62,8 @@ fn run(cli: Cli) -> Result<()> {
 
 fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
     let profile = resolve_profile(&args.profile, &args.codec, &args.container,
-                                  args.bitrate, args.sample_rate, args.channels,
-                                  &args.profile_dir)?;
+                                  &args.extension, args.bitrate, args.sample_rate,
+                                  args.channels, args.cbr, &args.profile_dir)?;
 
     let inputs = expand_inputs(&args.inputs)?;
     if inputs.is_empty() {
@@ -134,8 +134,8 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
 
 fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
     let profile = resolve_profile(&args.profile, &args.codec, &args.container,
-                                  args.bitrate, args.sample_rate, args.channels,
-                                  &args.profile_dir)?;
+                                  &args.extension, args.bitrate, args.sample_rate,
+                                  args.channels, args.cbr, &args.profile_dir)?;
 
     let inputs = expand_inputs(&args.inputs)?;
     let source_root = args.source_root.as_deref().or_else(|| common_prefix(&inputs));
@@ -395,20 +395,24 @@ fn resolve_profile(
     profile_id: &Option<String>,
     codec: &Option<String>,
     container: &Option<String>,
+    extension: &Option<String>,
     bitrate: Option<u32>,
     sample_rate: Option<u32>,
     channels: Option<u8>,
+    cbr: bool,
     profile_dirs: &[PathBuf],
 ) -> Result<profiles::DeviceProfile> {
     if let Some(id) = profile_id {
         return profiles::DeviceProfile::load_by_id(id, profile_dirs);
     }
 
-    // Manual codec/container specification
     let codec = codec.as_deref().ok_or_else(|| {
-        anyhow::anyhow!("either --profile or --codec/--container must be specified")
+        anyhow::anyhow!("either --profile or --codec must be specified")
     })?;
+    // container defaults to codec (e.g. --codec mp3 → container "mp3")
     let container = container.as_deref().unwrap_or(codec);
+    // extension defaults to container (e.g. container "m4a" → extension "m4a")
+    let extension = extension.as_deref().unwrap_or(container);
 
     Ok(profiles::DeviceProfile {
         id: "custom".to_string(),
@@ -420,8 +424,8 @@ fn resolve_profile(
         bitrate_kbps: bitrate,
         sample_rate_hz: sample_rate,
         channels,
-        cbr: true,
-        extension: container.to_string(),
+        cbr,
+        extension: extension.to_string(),
         notes: None,
     })
 }
