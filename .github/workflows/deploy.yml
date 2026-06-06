@@ -132,11 +132,24 @@ jobs:
 
       - name: Bundle FFmpeg (Linux)
         if: matrix.platform == 'linux-x86_64'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl -fSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -o ffmpeg.tar.xz
-          tar -xJf ffmpeg.tar.xz
-          cp ffmpeg-*-amd64-static/ffmpeg dist/ffmpeg
-          cp ffmpeg-*-amd64-static/ffprobe dist/ffprobe
+          # johnvansickle.com is unreliable from CI — use BtbN Linux LGPL builds.
+          ASSET_URL=$(curl -fSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases" \
+            | jq -r '.[0].assets[] | select(.name | test("linux64.*lgpl.*\\.tar\\.xz")) | .browser_download_url' \
+            | head -1)
+          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+            echo "No linux64 lgpl tar.xz asset found in latest BtbN release"
+            exit 1
+          fi
+          echo "Downloading: $ASSET_URL"
+          curl -fSL "$ASSET_URL" -o ffmpeg-linux.tar.xz
+          tar -xJf ffmpeg-linux.tar.xz
+          cp ffmpeg-*/bin/ffmpeg dist/ffmpeg
+          cp ffmpeg-*/bin/ffprobe dist/ffprobe
           chmod +x dist/ffmpeg dist/ffprobe
 
       # ── Build atracdenc ────────────────────────────────────────────────────
