@@ -1,0 +1,12 @@
+id          = "minidisc-lp2"
+name        = "MiniDisc LP2"
+vendor      = "Sony"
+description = "MiniDisc LP2 mode — ATRAC3 at 132 kbps, 44.1 kHz stereo"
+container   = "oma"
+codec       = "atrac3"
+bitrate_kbps = 132
+sample_rate_hz = 44100
+channels    = 2
+cbr         = true
+extension   = "oma"
+notes       = "Requires atracdenc in PATH. LP2 doubles recording time vs SP with minimal audible quality loss at normal listening levels."

@@ -1,0 +1,11 @@
+id          = "generic-flac"
+name        = "Generic FLAC — Lossless"
+description = "FLAC lossless compression. Preserves all audio data exactly."
+container   = "flac"
+codec       = "flac"
+# No bitrate — lossless
+# sample_rate_hz unset — preserve source rate
+# channels unset — preserve source channels
+cbr         = false
+extension   = "flac"
+notes       = "Requires FFmpeg. Use for archival copies or devices with lossless support."

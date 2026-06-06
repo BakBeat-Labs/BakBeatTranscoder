@@ -1,0 +1,12 @@
+id          = "minidisc-sp"
+name        = "MiniDisc SP"
+vendor      = "Sony"
+description = "MiniDisc Standard Play — ATRAC1 at ~292 kbps, 44.1 kHz stereo"
+container   = "aea"
+codec       = "atrac1"
+bitrate_kbps = 292
+sample_rate_hz = 44100
+channels    = 2
+cbr         = true
+extension   = "aea"
+notes       = "Requires atracdenc in PATH. SP mode provides the highest quality on standard MiniDisc. Output is raw ATRAC1 data (.aea) for use with linux-minidisc / Platinum-MD."

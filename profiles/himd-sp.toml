@@ -1,0 +1,12 @@
+id          = "himd-sp"
+name        = "HiMD SP"
+vendor      = "Sony"
+description = "HiMD Standard Play — ATRAC3plus at 256 kbps, 44.1 kHz stereo"
+container   = "oma"
+codec       = "atrac3p"
+bitrate_kbps = 256
+sample_rate_hz = 44100
+channels    = 2
+cbr         = true
+extension   = "oma"
+notes       = "Requires atracdenc with ATRAC3plus support. HiMD SP provides near-CD quality with significantly more recording capacity than standard MD SP."

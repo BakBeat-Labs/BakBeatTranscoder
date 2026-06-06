@@ -1,0 +1,11 @@
+id          = "generic-mp3-128"
+name        = "Generic MP3 — 128 kbps CBR"
+description = "MP3 at 128 kbps CBR, 44.1 kHz stereo. Compatible with virtually all MP3 players."
+container   = "mp3"
+codec       = "mp3"
+bitrate_kbps = 128
+sample_rate_hz = 44100
+channels    = 2
+cbr         = true
+extension   = "mp3"
+notes       = "Requires FFmpeg with libmp3lame. Use for maximum device compatibility."

@@ -1,0 +1,11 @@
+id          = "generic-aac-128"
+name        = "Generic AAC — 128 kbps"
+description = "AAC-LC at 128 kbps, 44.1 kHz stereo. Sounds better than MP3 at equivalent bitrate."
+container   = "m4a"
+codec       = "aac"
+bitrate_kbps = 128
+sample_rate_hz = 44100
+channels    = 2
+cbr         = true
+extension   = "m4a"
+notes       = "Requires FFmpeg. Widely supported by iOS, Android, modern MP3 players, and most car stereos."

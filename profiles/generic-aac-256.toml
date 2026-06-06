@@ -1,0 +1,11 @@
+id          = "generic-aac-256"
+name        = "Generic AAC — 256 kbps"
+description = "AAC-LC at 256 kbps, 44.1 kHz stereo. Transparent quality for most listeners."
+container   = "m4a"
+codec       = "aac"
+bitrate_kbps = 256
+sample_rate_hz = 44100
+channels    = 2
+cbr         = true
+extension   = "m4a"
+notes       = "Requires FFmpeg."

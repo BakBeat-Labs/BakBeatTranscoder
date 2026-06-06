@@ -1,0 +1,12 @@
+id          = "minidisc-lp4"
+name        = "MiniDisc LP4"
+vendor      = "Sony"
+description = "MiniDisc LP4 mode — ATRAC3 at 66 kbps, 44.1 kHz stereo"
+container   = "oma"
+codec       = "atrac3"
+bitrate_kbps = 66
+sample_rate_hz = 44100
+channels    = 2
+cbr         = true
+extension   = "oma"
+notes       = "Requires atracdenc in PATH. LP4 quadruples recording time but has noticeable quality loss — suitable for spoken word or archival at high volume."
