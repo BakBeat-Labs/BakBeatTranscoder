@@ -111,14 +111,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # BtbN uses dated autobuild tags — gh CLI resolves the actual latest.
-          gh release download `
-            --repo BtbN/FFmpeg-Builds `
-            --pattern "*win64-lgpl-essentials*.zip" `
-            --dir . `
-            --clobber
-          $zip = Get-ChildItem -Filter "*win64-lgpl-essentials*.zip" | Select-Object -First 1
-          Expand-Archive $zip.Name -DestinationPath ffmpeg-tmp
+          # BtbN LGPL essentials — no GPL codecs.
+          # BtbN marks all releases as pre-releases so gh release download skips them.
+          # Use the API directly: releases[0] is always the most recent regardless of flag.
+          $releases = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases" `
+            -Headers @{Authorization = "Bearer $env:GH_TOKEN"}
+          $asset = $releases[0].assets `
+            | Where-Object { $_.name -match "win64-lgpl-essentials" } `
+            | Select-Object -First 1
+          if (-not $asset) { Write-Error "No win64-lgpl-essentials asset found"; exit 1 }
+          Write-Host "Downloading $($asset.name)"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg-win.zip
+          Expand-Archive ffmpeg-win.zip -DestinationPath ffmpeg-tmp
           Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffmpeg.exe  | Select-Object -First 1).FullName dist\ffmpeg.exe
           Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName dist\ffprobe.exe
         shell: powershell
