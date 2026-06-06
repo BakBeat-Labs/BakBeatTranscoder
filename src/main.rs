@@ -260,10 +260,10 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
     // Re-validate: adapter availability may have changed since plan time
     let dummy_jobs: Vec<planner::PlannedJob> = graph.nodes.iter().map(|n| {
         use planner::PlannedJob;
-        use probe::AudioInfo;
+        use probe::{AudioInfo, MediaInfo};
         PlannedJob {
             source_path: n.input_path.clone(),
-            source_info: AudioInfo {
+            source_info: MediaInfo::Audio(AudioInfo {
                 path: n.input_path.clone(),
                 container: String::new(),
                 codec: String::new(),
@@ -273,7 +273,7 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
                 duration_secs: None,
                 bitrate_kbps: None,
                 tags: std::collections::BTreeMap::new(),
-            },
+            }),
             output_path: n.output_path.clone(),
             params: n.params.clone(),
             assigned_adapter: Some(n.adapter.clone()),
@@ -380,10 +380,10 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
 
     // Build dummy jobs for capability validation using the graph nodes
     let dummy_jobs: Vec<planner::PlannedJob> = prior.graph.nodes.iter().map(|n| {
-        use probe::AudioInfo;
+        use probe::{AudioInfo, MediaInfo};
         planner::PlannedJob {
             source_path: n.input_path.clone(),
-            source_info: AudioInfo {
+            source_info: MediaInfo::Audio(AudioInfo {
                 path: n.input_path.clone(),
                 container: String::new(),
                 codec: String::new(),
@@ -393,7 +393,7 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
                 duration_secs: None,
                 bitrate_kbps: None,
                 tags: std::collections::BTreeMap::new(),
-            },
+            }),
             output_path: n.output_path.clone(),
             params: n.params.clone(),
             assigned_adapter: Some(n.adapter.clone()),
@@ -446,37 +446,55 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
 // ── probe ─────────────────────────────────────────────────────────────────────
 
 fn cmd_probe(args: cli::ProbeArgs, json: bool) -> Result<()> {
-    let info = probe::probe_file(&args.file)?;
+    use probe::MediaInfo;
+
+    let info = probe::probe_media(&args.file)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&info)?);
-    } else {
-        println!("path:        {}", info.path.display());
-        println!("container:   {}", info.container);
-        println!("codec:       {}", info.codec);
-        if let Some(sr) = info.sample_rate_hz {
-            println!("sample rate: {sr} Hz");
+        return Ok(());
+    }
+
+    match &info {
+        MediaInfo::Audio(a) => {
+            println!("path:        {}", a.path.display());
+            println!("type:        audio");
+            println!("container:   {}", a.container);
+            println!("codec:       {}", a.codec);
+            if let Some(sr) = a.sample_rate_hz { println!("sample rate: {sr} Hz"); }
+            if let Some(ch) = a.channels      { println!("channels:    {ch}"); }
+            if let Some(bps) = a.bits_per_sample { println!("bit depth:   {bps}"); }
+            if let Some(dur) = a.duration_secs {
+                println!("duration:    {:.1}s ({:.0}m{:.0}s)", dur, (dur / 60.0).floor(), dur % 60.0);
+            }
+            if let Some(br) = a.bitrate_kbps { println!("bitrate:     ~{br} kbps"); }
+            if !a.tags.is_empty() {
+                println!("tags:");
+                for (k, v) in &a.tags { println!("  {k}: {v}"); }
+            }
         }
-        if let Some(ch) = info.channels {
-            println!("channels:    {ch}");
-        }
-        if let Some(bps) = info.bits_per_sample {
-            println!("bit depth:   {bps}");
-        }
-        if let Some(dur) = info.duration_secs {
-            println!("duration:    {:.1}s ({:.0}m{:.0}s)",
-                dur,
-                (dur / 60.0).floor(),
-                dur % 60.0
-            );
-        }
-        if let Some(br) = info.bitrate_kbps {
-            println!("bitrate:     ~{br} kbps");
-        }
-        if !info.tags.is_empty() {
-            println!("tags:");
-            for (k, v) in &info.tags {
-                println!("  {k}: {v}");
+        MediaInfo::Video(v) => {
+            println!("path:        {}", v.path.display());
+            println!("type:        video");
+            println!("container:   {}", v.container);
+            if let Some(dur) = v.duration_secs {
+                println!("duration:    {:.1}s ({:.0}m{:.0}s)", dur, (dur / 60.0).floor(), dur % 60.0);
+            }
+            for (i, vs) in v.video_streams.iter().enumerate() {
+                println!("video[{i}]:    {} {}x{}", vs.codec, vs.width, vs.height);
+                if let Some(fps) = vs.frame_rate { println!("  fps:       {fps:.3}"); }
+                if let Some(br)  = vs.bitrate_kbps { println!("  bitrate:   ~{br} kbps"); }
+                if let Some(pf)  = &vs.pixel_format { println!("  pixel fmt: {pf}"); }
+            }
+            for (i, aus) in v.audio_streams.iter().enumerate() {
+                println!("audio[{i}]:    {}", aus.codec);
+                if let Some(sr) = aus.sample_rate_hz { println!("  sample rate: {sr} Hz"); }
+                if let Some(ch) = aus.channels       { println!("  channels:    {ch}"); }
+                if let Some(br) = aus.bitrate_kbps   { println!("  bitrate:     ~{br} kbps"); }
+            }
+            if !v.tags.is_empty() {
+                println!("tags:");
+                for (k, val) in &v.tags { println!("  {k}: {val}"); }
             }
         }
     }

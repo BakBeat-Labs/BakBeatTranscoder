@@ -2,12 +2,21 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Symphonia-based audio probing. Symphonia is our metadata authority —
-//! we do NOT shell out to FFmpeg for probing or format understanding.
+//! Media probing.
+//!
+//! Audio files: probed natively via Symphonia (MPL-2.0). Symphonia is our
+//! metadata authority for audio — no subprocess, no FFmpeg.
+//!
+//! Video files: probed via ffprobe (ships with FFmpeg). ffprobe is called as
+//! an external subprocess; its output is parsed from JSON. This keeps the
+//! licensing boundary clean — we call a binary, we don't link a library.
+//!
+//! Entry point: `probe_media(path)` routes to the right prober automatically.
 
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -17,36 +26,148 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::{MetadataOptions, StandardTagKey, Value};
 use symphonia::core::probe::Hint;
 
+use crate::profiles::DeviceProfile;
+
+// ── Public types ──────────────────────────────────────────────────────────────
+
+/// Result of probing any media file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "media_type", rename_all = "snake_case")]
+pub enum MediaInfo {
+    Audio(AudioInfo),
+    Video(VideoInfo),
+}
+
+/// Probe result for an audio file (Symphonia-based).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioInfo {
     pub path: PathBuf,
-    /// Container format derived from file extension (e.g. "flac", "mp3", "m4a")
+    /// Container format from file extension (e.g. "flac", "mp3", "m4a")
     pub container: String,
     /// Codec string (e.g. "mp3", "aac", "flac", "vorbis", "alac", "pcm_s16le")
     pub codec: String,
     pub sample_rate_hz: Option<u32>,
     pub channels: Option<u8>,
     pub bits_per_sample: Option<u32>,
-    /// Approximate duration in seconds, derived from n_frames / sample_rate
     pub duration_secs: Option<f64>,
-    /// Approximate bitrate in kbps, estimated from file size and duration
+    /// Approximate bitrate in kbps estimated from file size and duration
     pub bitrate_kbps: Option<u32>,
-    /// Normalized metadata tags (title, artist, album, etc.)
     pub tags: BTreeMap<String, String>,
 }
 
-impl AudioInfo {
-    /// Whether this file is already in the target format (codec + container match).
+/// Probe result for a video file (ffprobe-based).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoInfo {
+    pub path: PathBuf,
+    /// Primary container format (e.g. "mp4", "mov", "mkv")
+    pub container: String,
+    pub duration_secs: Option<f64>,
+    pub video_streams: Vec<VideoStream>,
+    pub audio_streams: Vec<AudioStream>,
+    pub tags: BTreeMap<String, String>,
+}
+
+/// A single video stream within a container.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoStream {
+    pub codec: String,
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: Option<f32>,
+    pub bitrate_kbps: Option<u32>,
+    pub pixel_format: Option<String>,
+}
+
+/// A single audio stream within a container.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioStream {
+    pub codec: String,
+    pub sample_rate_hz: Option<u32>,
+    pub channels: Option<u8>,
+    pub bitrate_kbps: Option<u32>,
+}
+
+// ── MediaInfo helpers ─────────────────────────────────────────────────────────
+
+impl MediaInfo {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Audio(a) => &a.path,
+            Self::Video(v) => &v.path,
+        }
+    }
+
+    pub fn container(&self) -> &str {
+        match self {
+            Self::Audio(a) => &a.container,
+            Self::Video(v) => &v.container,
+        }
+    }
+
+    pub fn duration_secs(&self) -> Option<f64> {
+        match self {
+            Self::Audio(a) => a.duration_secs,
+            Self::Video(v) => v.duration_secs,
+        }
+    }
+
+    pub fn tags(&self) -> &BTreeMap<String, String> {
+        match self {
+            Self::Audio(a) => &a.tags,
+            Self::Video(v) => &v.tags,
+        }
+    }
+
+    /// Whether this file already matches a device profile's target format.
     /// Used by the planner to skip no-op transcodes.
-    pub fn matches_codec(&self, codec: &str, container: &str) -> bool {
-        self.codec.eq_ignore_ascii_case(codec)
-            && self.container.eq_ignore_ascii_case(container)
+    pub fn already_matches_profile(&self, profile: &DeviceProfile) -> bool {
+        use crate::graph::MediaType;
+        match (self, &profile.media_type) {
+            (MediaInfo::Audio(a), MediaType::Audio) => {
+                a.codec.eq_ignore_ascii_case(&profile.audio_codec)
+                    && a.container.eq_ignore_ascii_case(&profile.container)
+            }
+            (MediaInfo::Video(v), MediaType::Video) => {
+                let video_ok = profile
+                    .video_codec
+                    .as_deref()
+                    .map(|vc| {
+                        v.video_streams
+                            .first()
+                            .map(|s| s.codec.eq_ignore_ascii_case(vc))
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(true);
+                let audio_ok = v
+                    .audio_streams
+                    .first()
+                    .map(|s| s.codec.eq_ignore_ascii_case(&profile.audio_codec))
+                    .unwrap_or(false);
+                let container_ok = v.container.eq_ignore_ascii_case(&profile.container);
+                video_ok && audio_ok && container_ok
+            }
+            // Media type mismatch — never a pass-through
+            _ => false,
+        }
     }
 }
 
-pub fn probe_file(path: &Path) -> Result<AudioInfo> {
+// ── Public entry point ────────────────────────────────────────────────────────
+
+/// Probe any media file, routing to Symphonia (audio) or ffprobe (video).
+pub fn probe_media(path: &Path) -> Result<MediaInfo> {
+    if is_video_extension(path) {
+        probe_video_file(path).map(MediaInfo::Video)
+    } else {
+        probe_audio_file(path).map(MediaInfo::Audio)
+    }
+}
+
+// ── Audio probing (Symphonia) ─────────────────────────────────────────────────
+
+pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
     if !path.exists() {
-        return Err(anyhow!("File not found: {}", path.display()));
+        return Err(anyhow!("file not found: {}", path.display()));
     }
 
     let file_size = std::fs::metadata(path)
@@ -61,17 +182,14 @@ pub fn probe_file(path: &Path) -> Result<AudioInfo> {
         hint.with_extension(ext);
     }
 
-    let fmt_opts = FormatOptions {
-        enable_gapless: false,
-        ..Default::default()
-    };
+    let fmt_opts = FormatOptions { enable_gapless: false, ..Default::default() };
     let meta_opts: MetadataOptions = Default::default();
 
     let mut probed = symphonia::default::get_probe()
         .format(&hint, mss, &fmt_opts, &meta_opts)
         .with_context(|| format!("probing {}", path.display()))?;
 
-    // Clone codec params before taking a mutable borrow for metadata
+    // Clone codec params before taking mutable borrow for metadata
     let codec_params = probed
         .format
         .default_track()
@@ -85,26 +203,19 @@ pub fn probe_file(path: &Path) -> Result<AudioInfo> {
     let bits_per_sample = codec_params
         .bits_per_sample
         .or(codec_params.bits_per_coded_sample);
-
     let duration_secs = codec_params
         .n_frames
         .zip(codec_params.sample_rate)
         .map(|(frames, rate)| frames as f64 / rate as f64);
-
     let bitrate_kbps = duration_secs
         .filter(|&d| d > 0.0)
         .map(|d| ((file_size as f64 * 8.0) / d / 1000.0) as u32);
 
-    // Collect tags — try format reader's embedded metadata first, then probe log.
-    // Each scope is explicit to satisfy the borrow checker: format metadata requires
-    // &mut probed.format, and ProbedMetadata::get() returns an owned Metadata<'_>
-    // wrapper that must stay alive while we read from it.
     let tags = {
         let from_format: Option<BTreeMap<String, String>> = {
             let meta = probed.format.metadata();
             meta.current().map(|rev| collect_tags(rev.tags()))
         };
-
         if let Some(t) = from_format.filter(|t| !t.is_empty()) {
             t
         } else if let Some(meta) = probed.metadata.get() {
@@ -137,9 +248,148 @@ pub fn probe_file(path: &Path) -> Result<AudioInfo> {
     })
 }
 
-fn collect_tags(
-    tags: &[symphonia::core::meta::Tag],
-) -> BTreeMap<String, String> {
+// ── Video probing (ffprobe) ───────────────────────────────────────────────────
+
+/// Probe a video file using ffprobe.
+///
+/// ffprobe ships with FFmpeg. It is called as an external subprocess and its
+/// JSON output is parsed. This preserves the licensing boundary: we call a
+/// binary, we do not link against FFmpeg's libraries.
+pub fn probe_video_file(path: &Path) -> Result<VideoInfo> {
+    if !path.exists() {
+        return Err(anyhow!("file not found: {}", path.display()));
+    }
+
+    let ffprobe = which::which("ffprobe").map_err(|_| {
+        anyhow!(
+            "ffprobe not found in PATH — install FFmpeg to probe video files \
+             (https://ffmpeg.org)"
+        )
+    })?;
+
+    let output = Command::new(&ffprobe)
+        .args([
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams",
+            "-show_format",
+            &path.to_string_lossy(),
+        ])
+        .output()
+        .context("running ffprobe")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("ffprobe failed for {}: {}", path.display(), stderr.trim()));
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parsing ffprobe JSON output")?;
+
+    parse_ffprobe_output(path, &json)
+}
+
+fn parse_ffprobe_output(path: &Path, json: &serde_json::Value) -> Result<VideoInfo> {
+    let streams = json["streams"]
+        .as_array()
+        .ok_or_else(|| anyhow!("ffprobe output has no streams array"))?;
+
+    let fmt = &json["format"];
+
+    // Use the first token of format_name (e.g. "mov,mp4,m4a,3gp" → "mov")
+    let container = fmt["format_name"]
+        .as_str()
+        .unwrap_or("unknown")
+        .split(',')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+
+    let duration_secs = fmt["duration"]
+        .as_str()
+        .and_then(|s| s.parse::<f64>().ok());
+
+    let mut video_streams: Vec<VideoStream> = Vec::new();
+    let mut audio_streams: Vec<AudioStream> = Vec::new();
+
+    for s in streams {
+        match s["codec_type"].as_str() {
+            Some("video") => {
+                video_streams.push(VideoStream {
+                    codec: s["codec_name"].as_str().unwrap_or("unknown").to_string(),
+                    width: s["width"].as_u64().unwrap_or(0) as u32,
+                    height: s["height"].as_u64().unwrap_or(0) as u32,
+                    frame_rate: parse_frame_rate(s["r_frame_rate"].as_str()),
+                    bitrate_kbps: s["bit_rate"]
+                        .as_str()
+                        .and_then(|b| b.parse::<u64>().ok())
+                        .map(|bps| (bps / 1000) as u32),
+                    pixel_format: s["pix_fmt"].as_str().map(str::to_owned),
+                });
+            }
+            Some("audio") => {
+                audio_streams.push(AudioStream {
+                    codec: s["codec_name"].as_str().unwrap_or("unknown").to_string(),
+                    sample_rate_hz: s["sample_rate"]
+                        .as_str()
+                        .and_then(|r| r.parse::<u32>().ok()),
+                    channels: s["channels"].as_u64().map(|c| c as u8),
+                    bitrate_kbps: s["bit_rate"]
+                        .as_str()
+                        .and_then(|b| b.parse::<u64>().ok())
+                        .map(|bps| (bps / 1000) as u32),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // Collect format-level tags (title, artist, etc.)
+    let tags: BTreeMap<String, String> = fmt["tags"]
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .map(|(k, v)| (k.to_lowercase(), v.as_str().unwrap_or("").to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(VideoInfo {
+        path: path.to_owned(),
+        container,
+        duration_secs,
+        video_streams,
+        audio_streams,
+        tags,
+    })
+}
+
+/// Parse an ffprobe frame-rate fraction string (e.g. "30000/1001", "25/1").
+fn parse_frame_rate(s: Option<&str>) -> Option<f32> {
+    let s = s?;
+    let mut parts = s.splitn(2, '/');
+    let num: f32 = parts.next()?.parse().ok()?;
+    let den: f32 = parts.next().unwrap_or("1").parse().ok()?;
+    if den == 0.0 { None } else { Some(num / den) }
+}
+
+// ── Routing ───────────────────────────────────────────────────────────────────
+
+fn is_video_extension(path: &Path) -> bool {
+    const VIDEO_EXTS: &[&str] = &[
+        "mp4", "m4v", "mov", "avi", "mkv", "wmv", "flv", "webm",
+        "mpeg", "mpg", "m2v", "ts", "mts", "m2ts", "3gp", "3g2",
+        "ogv", "vob", "f4v",
+    ];
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| VIDEO_EXTS.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+// ── Symphonia helpers ─────────────────────────────────────────────────────────
+
+fn collect_tags(tags: &[symphonia::core::meta::Tag]) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     for tag in tags {
         let key = tag
@@ -152,7 +402,7 @@ fn collect_tags(
             Value::UnsignedInt(n) => n.to_string(),
             Value::SignedInt(n) => n.to_string(),
             Value::Float(f) => f.to_string(),
-            Value::Binary(_) => continue, // skip binary blobs
+            Value::Binary(_) => continue,
             Value::Flag => "true".to_string(),
         };
         map.entry(key).or_insert(value);
