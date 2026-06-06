@@ -410,6 +410,13 @@ FFmpeg / ffprobe / atracdenc (LGPL)
 
 **BakBeat ships `bbt` and nothing else.** All interaction with LGPL-licensed tools happens inside `bbt`. BakBeat has no LGPL exposure because it never directly distributes, links against, or calls these tools itself.
 
-**This project** (bbt) distributes FFmpeg, ffprobe, and atracdenc alongside its platform releases. This is bbt's LGPL compliance obligation, not BakBeat's. FFmpeg and atracdenc are called as external subprocesses — never statically or dynamically linked — which means no derivative work is created and the LGPL's copyleft does not extend to bbt's source code. bbt attributes these tools in this README and includes their licenses in all distributions.
+**This project** (bbt) distributes FFmpeg, ffprobe, and atracdenc alongside its platform releases. This is bbt's LGPL compliance obligation, not BakBeat's. FFmpeg and atracdenc are called as external subprocesses — never statically or dynamically linked — which means no derivative work is created and the LGPL's copyleft does not extend to bbt's source code.
+
+Every release archive includes `LICENSE` (MPL-2.0) and `THIRD-PARTY-LICENSES`, which contains:
+- LGPL-2.1+ attribution and source pointer for FFmpeg/ffprobe
+- LGPL-3.0 attribution and source pointer for atracdenc
+- BSD-3-Clause notice for `encoding_rs` (required for binary redistributions)
+- Unicode-3.0 notice for `unicode-ident` (required for binary redistributions)
+- Attribution for all other statically linked Rust crate dependencies
 
 The MPL-2.0 "Larger Work" provision explicitly permits use of MPL-2.0 code inside proprietary software without requiring the proprietary software to become open source. This is by design: `bbt` is intended to be embeddable in BakBeat without legal risk to BakBeat.

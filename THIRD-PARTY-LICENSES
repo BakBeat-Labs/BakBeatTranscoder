@@ -1,0 +1,240 @@
+THIRD-PARTY LICENSES
+====================
+
+This file contains license and attribution notices for software included
+in or distributed alongside BakBeat Transcoder (bbt).
+
+─────────────────────────────────────────────────────────────────────────────
+PART 1 — BUNDLED EXTERNAL TOOLS
+─────────────────────────────────────────────────────────────────────────────
+
+Platform release archives (bbt-macos-universal.tar.gz, bbt-windows-x86_64.zip,
+bbt-linux-x86_64.tar.gz) bundle the following tools as standalone executables.
+They are invoked as external subprocesses and are not linked into bbt.
+
+1.1  FFmpeg and ffprobe
+───────────────────────
+License:  GNU Lesser General Public License version 2.1 or later (LGPL-2.1+)
+Source:   https://ffmpeg.org  /  https://git.ffmpeg.org/ffmpeg.git
+Copyright © 2000–present the FFmpeg developers
+
+The full text of the LGPL 2.1 is available at:
+  https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+FFmpeg is a trademark of Fabrice Bellard.  Use of FFmpeg is subject to its
+license terms; see the FFmpeg source repository for the complete list of
+copyright holders and component-level licenses.
+
+In accordance with LGPL section 6, users may obtain the complete
+corresponding source code for the version of FFmpeg bundled in a given
+release from the URL above or from the release's bundled ffmpeg binary
+using `ffmpeg -version`.
+
+1.2  atracdenc
+──────────────
+License:  GNU Lesser General Public License version 3.0 (LGPL-3.0)
+Source:   https://github.com/dcherednik/atracdenc
+Copyright © Dmitry Cherednik and contributors
+
+The full text of the LGPL 3.0 is available at:
+  https://www.gnu.org/licenses/lgpl-3.0.html
+
+In accordance with LGPL section 6, users may obtain the corresponding
+source code from the repository URL above.
+
+─────────────────────────────────────────────────────────────────────────────
+PART 2 — RUST CRATE DEPENDENCIES (statically linked into the bbt binary)
+─────────────────────────────────────────────────────────────────────────────
+
+2.1  Symphonia  (MPL-2.0)
+─────────────────────────
+License:  Mozilla Public License 2.0 — same as bbt itself.
+Source:   https://github.com/pdeljanov/Symphonia
+Copyright © Philip Deljanov and Symphonia contributors
+
+Crates: symphonia, symphonia-bundle-flac, symphonia-bundle-mp3,
+  symphonia-codec-aac, symphonia-codec-adpcm, symphonia-codec-alac,
+  symphonia-codec-pcm, symphonia-codec-vorbis, symphonia-core,
+  symphonia-format-isomp4, symphonia-format-mkv, symphonia-format-ogg,
+  symphonia-format-riff, symphonia-metadata, symphonia-utils-xiph
+
+2.2  encoding_rs  (Apache-2.0 OR MIT) AND BSD-3-Clause
+──────────────────────────────────────────────────────
+License:  The Rust code is MIT OR Apache-2.0.  Encoding index data included
+  in the crate is derived from work covered by the BSD 3-Clause License.
+Source:   https://github.com/hsivonen/encoding_rs
+Copyright © 2015–2024 Henri Sivonen and/or Mozilla Corporation
+
+BSD 3-Clause Notice (required for binary redistributions):
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+
+  1. Redistributions of source code must retain the above copyright notice,
+     this list of conditions and the following disclaimer.
+
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in the
+     documentation and/or other materials provided with the distribution.
+
+  3. Neither the name of the copyright holder nor the names of its
+     contributors may be used to endorse or promote products derived from
+     this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  POSSIBILITY OF SUCH DAMAGE.
+
+2.3  unicode-ident  (MIT OR Apache-2.0) AND Unicode-3.0
+────────────────────────────────────────────────────────
+License:  The Rust code is MIT OR Apache-2.0.  Unicode identifier syntax
+  tables in the crate are covered by the Unicode License Agreement v3.
+Source:   https://github.com/dtolnay/unicode-ident
+
+Unicode License Agreement v3 Notice (required for binary redistributions):
+
+  COPYRIGHT AND PERMISSION NOTICE
+
+  Copyright © 1991–2023 Unicode, Inc. All rights reserved.
+
+  NOTICE TO USER: Carefully read the following legal agreement. BY
+  DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING UNICODE INC.'S DATA
+  FILES ("DATA FILES"), AND/OR SOFTWARE ("SOFTWARE"), YOU UNEQUIVOCALLY
+  ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE TERMS AND CONDITIONS OF THIS
+  AGREEMENT. IF YOU DO NOT AGREE, DO NOT DOWNLOAD, INSTALL, COPY, OR
+  OTHERWISE USE THE DATA FILES OR SOFTWARE.
+
+  Full license text: https://www.unicode.org/license.txt
+
+2.4  r-efi  (MIT OR Apache-2.0 OR LGPL-2.1-or-later)
+──────────────────────────────────────────────────────
+bbt uses this crate under the MIT OR Apache-2.0 terms.
+The LGPL-2.1-or-later option is not exercised.
+Source: https://github.com/r-efi/r-efi
+
+2.5  MIT-licensed crates
+────────────────────────
+The following crates are used under the MIT License:
+
+  aho-corasick       https://github.com/BurntSushi/aho-corasick
+  console            https://github.com/console-rs/console
+  extended           https://github.com/depp/extended-rs
+  generic-array      https://github.com/fizyk20/generic-array.git
+  indicatif          https://github.com/console-rs/indicatif
+  matchers           https://github.com/hawkw/matchers
+  memchr             https://github.com/BurntSushi/memchr
+  nu-ansi-term       https://github.com/nushell/nu-ansi-term
+  number_prefix      https://github.com/ogham/rust-number-prefix
+  sharded-slab       https://github.com/hawkw/sharded-slab
+  slab               https://github.com/tokio-rs/slab
+  strsim             https://github.com/rapidfuzz/strsim-rs
+  tracing            https://github.com/tokio-rs/tracing
+  tracing-attributes https://github.com/tokio-rs/tracing
+  tracing-core       https://github.com/tokio-rs/tracing
+  tracing-log        https://github.com/tokio-rs/tracing
+  tracing-subscriber https://github.com/tokio-rs/tracing
+  valuable           https://github.com/tokio-rs/valuable
+  which              https://github.com/harryfei/which-rs.git
+  winnow             https://github.com/winnow-rs/winnow
+  winsafe            https://github.com/rodrigocfd/winsafe
+  zmij               https://github.com/dtolnay/zmij
+
+2.6  MIT OR Apache-2.0 dual-licensed crates
+────────────────────────────────────────────
+The following crates are used under the MIT OR Apache-2.0 License:
+
+  anstream, anstyle, anstyle-parse, anstyle-query, anstyle-wincon
+    https://github.com/rust-cli/anstyle.git
+  android_system_properties  https://github.com/nical/android_system_properties
+  anyhow          https://github.com/dtolnay/anyhow
+  arrayvec        https://github.com/bluss/arrayvec
+  autocfg         https://github.com/cuviper/autocfg
+  bitflags        https://github.com/bitflags/bitflags
+  block-buffer, cpufeatures, crypto-common, digest, sha2
+    https://github.com/RustCrypto
+  bumpalo         https://github.com/fitzgen/bumpalo
+  cc, find-msvc-tools  https://github.com/rust-lang/cc-rs
+  cfg-if          https://github.com/rust-lang/cfg-if
+  chrono          https://github.com/chronotope/chrono
+  clap, clap_builder, clap_derive, clap_lex
+    https://github.com/clap-rs/clap
+  colorchoice     https://github.com/rust-cli/anstyle.git
+  core-foundation-sys  https://github.com/servo/core-foundation-rs
+  either          https://github.com/rayon-rs/either
+  encode_unicode   https://github.com/tormol/encode_unicode
+  equivalent      https://github.com/indexmap-rs/equivalent
+  errno           https://github.com/lambda-fairy/rust-errno
+  fastrand        https://github.com/smol-rs/fastrand
+  futures-core, futures-task, futures-util  https://github.com/rust-lang/futures-rs
+  getrandom       https://github.com/rust-random/getrandom
+  hashbrown       https://github.com/rust-lang/hashbrown
+  heck            https://github.com/withoutboats/heck
+  hex             https://github.com/KokaKiwi/rust-hex
+  home            https://github.com/rust-lang/cargo
+  iana-time-zone, iana-time-zone-haiku  https://github.com/strawlab/iana-time-zone
+  id-arena        https://github.com/fitzgen/id-arena
+  indexmap        https://github.com/indexmap-rs/indexmap
+  is_terminal_polyfill, once_cell_polyfill  https://github.com/polyfill-rs
+  itoa            https://github.com/dtolnay/itoa
+  js-sys, wasm-bindgen, wasm-bindgen-macro, wasm-bindgen-macro-support,
+  wasm-bindgen-shared  https://github.com/wasm-bindgen/wasm-bindgen
+  lazy_static     https://github.com/rust-lang-nursery/lazy-static.rs
+  leb128fmt       https://github.com/bluk/leb128fmt
+  libc            https://github.com/rust-lang/libc
+  log             https://github.com/rust-lang/log
+  linux-raw-sys, rustix  https://github.com/bytecodealliance/rustix
+  num-traits      https://github.com/rust-num/num-traits
+  once_cell       https://github.com/matklad/once_cell
+  pin-project-lite  https://github.com/taiki-e/pin-project-lite
+  portable-atomic   https://github.com/taiki-e/portable-atomic
+  prettyplease    https://github.com/dtolnay/prettyplease
+  proc-macro2     https://github.com/dtolnay/proc-macro2
+  quote           https://github.com/dtolnay/quote
+  regex-automata, regex-syntax  https://github.com/rust-lang/regex
+  rustversion     https://github.com/dtolnay/rustversion
+  semver          https://github.com/dtolnay/semver
+  serde, serde_core, serde_derive  https://github.com/serde-rs/serde
+  serde_json      https://github.com/serde-rs/json
+  serde_spanned, toml, toml_datetime, toml_edit, toml_write
+    https://github.com/toml-rs/toml
+  shlex           https://github.com/comex/rust-shlex
+  smallvec        https://github.com/servo/rust-smallvec
+  syn             https://github.com/dtolnay/syn
+  tempfile        https://github.com/Stebalien/tempfile
+  thiserror, thiserror-impl  https://github.com/dtolnay/thiserror
+  thread_local    https://github.com/Amanieu/thread_local-rs
+  typenum         https://github.com/paholg/typenum
+  unicode-width   https://github.com/unicode-rs/unicode-width
+  unicode-xid     https://github.com/unicode-rs/unicode-xid
+  utf8parse       https://github.com/alacritty/vte
+  uuid            https://github.com/uuid-rs/uuid
+  version_check   https://github.com/SergioBenitez/version_check
+  wasip2, wasip3, wasm-encoder, wasm-metadata, wasmparser,
+  wit-bindgen, wit-bindgen-core, wit-bindgen-rust, wit-bindgen-rust-macro,
+  wit-component, wit-parser  https://github.com/bytecodealliance
+  web-time        https://github.com/daxpedda/web-time
+  windows-core, windows-implement, windows-interface, windows-link,
+  windows-result, windows-strings, windows-sys, windows-targets,
+  windows_aarch64_gnullvm, windows_aarch64_msvc, windows_i686_gnu,
+  windows_i686_gnullvm, windows_i686_msvc, windows_x86_64_gnu,
+  windows_x86_64_gnullvm, windows_x86_64_msvc
+    https://github.com/microsoft/windows-rs
+
+2.7  Zlib / Unlicense crates
+─────────────────────────────
+  bytemuck   https://github.com/Lokathor/bytemuck   (Zlib OR Apache-2.0 OR MIT)
+  foldhash   https://github.com/orlp/foldhash        (Zlib)
+
+─────────────────────────────────────────────────────────────────────────────
+
+Standard MIT and Apache-2.0 license texts are available at:
+  MIT:        https://opensource.org/licenses/MIT
+  Apache-2.0: https://www.apache.org/licenses/LICENSE-2.0

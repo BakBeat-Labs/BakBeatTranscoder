@@ -292,6 +292,21 @@ jobs:
           # Note: xcrun stapler only works for .app/.pkg/.dmg.
           # For standalone binaries, Gatekeeper verifies notarization online.
 
+      # ── Bundle license files ───────────────────────────────────────────────
+
+      - name: Bundle license files (macOS / Linux)
+        if: runner.os != 'Windows'
+        run: |
+          cp LICENSE dist/LICENSE
+          cp THIRD-PARTY-LICENSES dist/THIRD-PARTY-LICENSES
+
+      - name: Bundle license files (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Copy-Item LICENSE dist\LICENSE
+          Copy-Item THIRD-PARTY-LICENSES dist\THIRD-PARTY-LICENSES
+        shell: powershell
+
       # ── Package ────────────────────────────────────────────────────────────
 
       - name: Package (macOS / Linux)
