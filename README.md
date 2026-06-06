@@ -30,21 +30,21 @@ The manifest is the ground truth record of what was produced. You can re-verify 
 
 ## Prerequisites
 
-**If you're using BakBeat:** FFmpeg, ffprobe, and atracdenc are bundled with the app. No manual installation needed.
+**If you're using BakBeat:** no action needed. BakBeat manages `bbt` and its dependencies for you.
 
-**If you're using `bbt` standalone:**
+**If you're using `bbt` standalone**, the platform releases from this repository include FFmpeg, ffprobe, and atracdenc bundled alongside the `bbt` binary — just download the release for your platform and everything works. Alternatively:
 
-- [FFmpeg](https://ffmpeg.org) — required for most transcoding (MP3, AAC, FLAC, OGG, Opus, ALAC, WAV, video). ffprobe ships alongside it and is used for video probing.
+- [FFmpeg](https://ffmpeg.org) — required for most transcoding (MP3, AAC, FLAC, OGG, Opus, ALAC, WAV, video). ffprobe ships with it and handles video probing.
 - [atracdenc](https://github.com/dcherednik/atracdenc) — required for MiniDisc ATRAC encoding (SP, LP2, LP4).
 
-Install via your package manager, or drop the binaries in the same directory as `bbt` and they'll be found automatically.
+Install these via your package manager, or drop the binaries in the same directory as `bbt` and they will be found automatically.
 
-**Overriding binary paths** — useful if you have multiple FFmpeg versions or need to point at a specific build:
+**Overriding binary paths** — if you need to point at a specific installation:
 
 ```bash
-export BBT_FFMPEG_PATH=/usr/local/bin/ffmpeg
-export BBT_FFPROBE_PATH=/usr/local/bin/ffprobe
-export BBT_ATRACDENC_PATH=/opt/atrac/atracdenc
+export BBT_FFMPEG_PATH=/path/to/ffmpeg
+export BBT_FFPROBE_PATH=/path/to/ffprobe
+export BBT_ATRACDENC_PATH=/path/to/atracdenc
 ```
 
 ---
@@ -356,6 +356,20 @@ Re-run failures: `bbt resume manifest.json`
 
 Mozilla Public License 2.0 — see [LICENSE](LICENSE).
 
-FFmpeg, ffprobe, and atracdenc are called as external subprocesses — never statically or dynamically linked. BakBeat ships bundled copies of these tools alongside `bbt`; standalone users can install them separately or drop binaries next to `bbt`.
+### Legal separation from BakBeat
 
-Subprocess-only invocation keeps the licensing boundary clean: FFmpeg and atracdenc are LGPL; calling a binary as a subprocess does not create a derivative work. BakBeat attributes these tools in its credits and includes their licenses in the distribution, satisfying LGPL requirements. MPL-2.0 applies to this codebase only.
+BakBeatTranscoder exists as a separate open-source component specifically to maintain a clean legal boundary between [BakBeat](https://bakbeat.com) (a proprietary commercial application) and the LGPL-licensed tools this transcoder depends on.
+
+```
+BakBeat (proprietary, commercial)
+    ↓ invokes as subprocess — clean process boundary
+bbt (MPL-2.0, this project) ← LGPL compliance sits here
+    ↓ invokes as subprocesses
+FFmpeg / ffprobe / atracdenc (LGPL)
+```
+
+**BakBeat ships `bbt` and nothing else.** All interaction with LGPL-licensed tools happens inside `bbt`. BakBeat has no LGPL exposure because it never directly distributes, links against, or calls these tools itself.
+
+**This project** (bbt) distributes FFmpeg, ffprobe, and atracdenc alongside its platform releases. This is bbt's LGPL compliance obligation, not BakBeat's. FFmpeg and atracdenc are called as external subprocesses — never statically or dynamically linked — which means no derivative work is created and the LGPL's copyleft does not extend to bbt's source code. bbt attributes these tools in this README and includes their licenses in all distributions.
+
+The MPL-2.0 "Larger Work" provision explicitly permits use of MPL-2.0 code inside proprietary software without requiring the proprietary software to become open source. This is by design: `bbt` is intended to be embeddable in BakBeat without legal risk to BakBeat.
