@@ -398,7 +398,7 @@ Mozilla Public License 2.0 — see [LICENSE](LICENSE).
 
 ### Legal separation from BakBeat
 
-BakBeatTranscoder exists as a separate open-source component specifically to maintain a clean legal boundary between [BakBeat](https://bakbeat.com) (a proprietary commercial application) and the LGPL-licensed tools this transcoder depends on.
+BakBeatTranscoder exists as a separate open-source component specifically to maintain a clean legal boundary between [BakBeat](https://bakbeat.com) (a proprietary closed source application) and the LGPL-licensed tools this transcoder depends on.
 
 ```
 BakBeat (proprietary, commercial)
