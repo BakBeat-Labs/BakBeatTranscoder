@@ -158,27 +158,28 @@ jobs:
       - name: Build atracdenc (macOS)
         if: matrix.platform == 'macos-universal'
         run: |
-          # atracdenc's CMakeLists.txt forces a Universal Binary build internally,
-          # overriding CMAKE_OSX_ARCHITECTURES. Homebrew's libsndfile is arm64-only,
-          # so the x86_64 slice fails to link.
-          # Fix: build libsndfile from source as a Universal Binary and pass it in directly.
-          # Side effect: we get a proper Universal atracdenc binary for free.
+          # atracdenc's CMakeLists.txt forces a Universal Binary build, so we need
+          # a Universal libsndfile. Homebrew only ships arm64.
+          # Build libsndfile as Universal and install to a local prefix.
+          # CMAKE_PREFIX_PATH tells cmake's find_library/find_path to look there first,
+          # which is more reliable than setting individual SNDFILE_* variables.
+          SNDFILE_PREFIX=$(pwd)/libsndfile-install
+
           git clone --depth 1 https://github.com/libsndfile/libsndfile.git libsndfile-src
           cmake -S libsndfile-src -B libsndfile-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DBUILD_SHARED_LIBS=OFF \
-            -DENABLE_EXTERNAL_LIBS=OFF
+            -DENABLE_EXTERNAL_LIBS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SNDFILE_PREFIX"
           cmake --build libsndfile-build
-          SNDFILE_INC=$(pwd)/libsndfile-src/include
-          SNDFILE_LIB=$(find libsndfile-build -name "libsndfile.a" | head -1)
+          cmake --install libsndfile-build
 
           git clone --depth 1 --recurse-submodules https://github.com/dcherednik/atracdenc.git atracdenc-src
           cmake -S atracdenc-src -B atracdenc-build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DLIBSNDFILE_INCLUDE_DIR="$SNDFILE_INC" \
-            -DSNDFILE_LIBRARIES="$SNDFILE_LIB"
+            -DCMAKE_PREFIX_PATH="$SNDFILE_PREFIX"
           cmake --build atracdenc-build --config Release
           BIN=$(find atracdenc-build -name "atracdenc" -not -name "*.cmake" -type f | head -1)
           cp "$BIN" dist/atracdenc

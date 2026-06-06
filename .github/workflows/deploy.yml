@@ -147,23 +147,25 @@ jobs:
       - name: Build atracdenc (macOS)
         if: matrix.platform == 'macos-universal'
         run: |
-          # Build Universal libsndfile from source — Homebrew only ships arm64.
+          # Build Universal libsndfile and install to local prefix.
+          # CMAKE_PREFIX_PATH lets cmake find it automatically.
+          SNDFILE_PREFIX=$(pwd)/libsndfile-install
+
           git clone --depth 1 https://github.com/libsndfile/libsndfile.git libsndfile-src
           cmake -S libsndfile-src -B libsndfile-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DBUILD_SHARED_LIBS=OFF \
-            -DENABLE_EXTERNAL_LIBS=OFF
+            -DENABLE_EXTERNAL_LIBS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SNDFILE_PREFIX"
           cmake --build libsndfile-build
-          SNDFILE_INC=$(pwd)/libsndfile-src/include
-          SNDFILE_LIB=$(find libsndfile-build -name "libsndfile.a" | head -1)
+          cmake --install libsndfile-build
 
           git clone --depth 1 --recurse-submodules https://github.com/dcherednik/atracdenc.git atracdenc-src
           cmake -S atracdenc-src -B atracdenc-build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DLIBSNDFILE_INCLUDE_DIR="$SNDFILE_INC" \
-            -DSNDFILE_LIBRARIES="$SNDFILE_LIB"
+            -DCMAKE_PREFIX_PATH="$SNDFILE_PREFIX"
           cmake --build atracdenc-build --config Release
           BIN=$(find atracdenc-build -name "atracdenc" -not -name "*.cmake" -type f | head -1)
           cp "$BIN" dist/atracdenc
