@@ -10,6 +10,7 @@ mod graph;
 mod planner;
 mod probe;
 mod profiles;
+mod progress;
 mod resolver;
 mod verifier;
 
@@ -61,6 +62,8 @@ fn run(cli: Cli) -> Result<()> {
 // ── transcode ─────────────────────────────────────────────────────────────────
 
 fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
+    use progress::{Emitter, Event, Phase};
+
     let profile = resolve_profile(&args.profile, &args.codec, &args.container,
                                   &args.extension, args.bitrate, args.sample_rate,
                                   args.channels, args.cbr, &args.profile_dir)?;
@@ -71,56 +74,91 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let source_root = args.source_root.as_deref()
-        .or_else(|| common_prefix(&inputs));
+    let source_root = args.source_root.as_deref().or_else(|| common_prefix(&inputs));
+    let mut emitter = Emitter::new(json);
 
-    // Phase 1: Plan
-    let mut plan = planner::build_plan(&inputs, &profile, &args.output, source_root)?;
+    // Phase 1: Probe + Plan
+    emitter.emit(Event::PhaseStart { phase: Phase::Probe, total: Some(inputs.len()) });
+
+    let mut plan = planner::build_plan(
+        &inputs, &profile, &args.output, source_root,
+        |current, total, path, elapsed_ms| {
+            emitter.emit(Event::FileComplete {
+                phase: Phase::Probe,
+                current,
+                total,
+                file: path.to_string_lossy().into_owned(),
+                output: None,
+                elapsed_ms,
+                success: true,
+                error: None,
+            });
+        },
+    )?;
+
+    emitter.emit(Event::PhaseComplete {
+        phase: Phase::Probe,
+        total: Some(inputs.len()),
+        jobs: None,
+        skipped: None,
+        success: None,
+        failed: None,
+    });
+
+    emitter.emit(Event::PhaseStart { phase: Phase::Plan, total: None });
+    emitter.emit(Event::PhaseComplete {
+        phase: Phase::Plan,
+        total: None,
+        jobs: Some(plan.jobs.len()),
+        skipped: Some(plan.skipped_count),
+        success: None,
+        failed: None,
+    });
 
     if plan.jobs.is_empty() {
-        if json {
-            println!("{{\"skipped\": true, \"reason\": \"all files already in target format\"}}");
-        } else {
-            println!("all files are already in the target format — nothing to do");
-        }
+        emitter.emit(Event::Complete {
+            success: 0,
+            failed: 0,
+            total_elapsed_ms: 0,
+            manifest: String::new(),
+        });
         return Ok(());
     }
 
     // Phase 2: Resolve capabilities
+    emitter.emit(Event::PhaseStart { phase: Phase::Resolve, total: None });
     let caps = resolver::ResolvedCapabilities::detect();
     caps.validate_plan(&plan.jobs)?;
     caps.assign_adapters(&mut plan.jobs);
+    emitter.emit(Event::PhaseComplete {
+        phase: Phase::Resolve,
+        total: None,
+        jobs: None,
+        skipped: None,
+        success: None,
+        failed: None,
+    });
 
     // Phase 3: Build graph
     let graph = planner::plan_to_graph(&plan)?;
 
-    if !json {
-        println!("{} files to transcode → {}", graph.nodes.len(), args.output.display());
-    }
+    // Phase 4: Execute (emitter handed to executor for per-file events)
+    let manifest = executor::execute_graph(&graph, &caps, &mut emitter, args.stop_on_error)?;
 
-    // Phase 4: Execute
-    let manifest = executor::execute_graph(
-        &graph,
-        &caps,
-        executor::ExecutorOptions {
-            show_progress: !json,
-            stop_on_error: args.stop_on_error,
-        },
-    )?;
-
-    // Phase 5: Save manifest
+    // Phase 5: Save manifest + emit complete
     let manifest_path = args.manifest.unwrap_or_else(|| args.output.join("manifest.json"));
     manifest.save_to_file(&manifest_path)?;
 
+    emitter.emit(Event::Complete {
+        success: manifest.success_count,
+        failed: manifest.failure_count,
+        total_elapsed_ms: manifest.total_elapsed_ms,
+        manifest: manifest_path.to_string_lossy().into_owned(),
+    });
+
+    // In JSON mode, also emit the full manifest as the final object
     if json {
         println!("{}", serde_json::to_string_pretty(&manifest)?);
-    } else {
-        println!(
-            "\n{} succeeded, {} failed — manifest saved to {}",
-            manifest.success_count,
-            manifest.failure_count,
-            manifest_path.display()
-        );
     }
 
     if manifest.failure_count > 0 {
@@ -133,18 +171,55 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
 // ── plan ──────────────────────────────────────────────────────────────────────
 
 fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
+    use progress::{Emitter, Event, Phase};
+
     let profile = resolve_profile(&args.profile, &args.codec, &args.container,
                                   &args.extension, args.bitrate, args.sample_rate,
                                   args.channels, args.cbr, &args.profile_dir)?;
 
     let inputs = expand_inputs(&args.inputs)?;
     let source_root = args.source_root.as_deref().or_else(|| common_prefix(&inputs));
+    let mut emitter = Emitter::new(json);
 
-    let mut plan = planner::build_plan(&inputs, &profile, &args.output, source_root)?;
+    emitter.emit(Event::PhaseStart { phase: Phase::Probe, total: Some(inputs.len()) });
 
+    let mut plan = planner::build_plan(
+        &inputs, &profile, &args.output, source_root,
+        |current, total, path, elapsed_ms| {
+            emitter.emit(Event::FileComplete {
+                phase: Phase::Probe,
+                current,
+                total,
+                file: path.to_string_lossy().into_owned(),
+                output: None,
+                elapsed_ms,
+                success: true,
+                error: None,
+            });
+        },
+    )?;
+
+    emitter.emit(Event::PhaseComplete {
+        phase: Phase::Probe,
+        total: Some(inputs.len()),
+        jobs: Some(plan.jobs.len()),
+        skipped: Some(plan.skipped_count),
+        success: None,
+        failed: None,
+    });
+
+    emitter.emit(Event::PhaseStart { phase: Phase::Resolve, total: None });
     let caps = resolver::ResolvedCapabilities::detect();
     caps.validate_plan(&plan.jobs)?;
     caps.assign_adapters(&mut plan.jobs);
+    emitter.emit(Event::PhaseComplete {
+        phase: Phase::Resolve,
+        total: None,
+        jobs: None,
+        skipped: None,
+        success: None,
+        failed: None,
+    });
 
     let graph = planner::plan_to_graph(&plan)?;
     graph.save_to_file(&args.graph_out)?;
@@ -199,26 +274,20 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
     }).collect();
     caps.validate_plan(&dummy_jobs)?;
 
-    let manifest = executor::execute_graph(
-        &graph,
-        &caps,
-        executor::ExecutorOptions {
-            show_progress: !json,
-            stop_on_error: args.stop_on_error,
-        },
-    )?;
+    let mut emitter = progress::Emitter::new(json);
+    let manifest = executor::execute_graph(&graph, &caps, &mut emitter, args.stop_on_error)?;
 
     manifest.save_to_file(&args.manifest)?;
 
+    emitter.emit(progress::Event::Complete {
+        success: manifest.success_count,
+        failed: manifest.failure_count,
+        total_elapsed_ms: manifest.total_elapsed_ms,
+        manifest: args.manifest.to_string_lossy().into_owned(),
+    });
+
     if json {
         println!("{}", serde_json::to_string_pretty(&manifest)?);
-    } else {
-        println!(
-            "\n{} succeeded, {} failed — manifest saved to {}",
-            manifest.success_count,
-            manifest.failure_count,
-            args.manifest.display()
-        );
     }
 
     if manifest.failure_count > 0 {

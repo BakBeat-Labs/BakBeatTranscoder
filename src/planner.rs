@@ -32,6 +32,8 @@ pub struct PlannedJob {
 
 pub struct TranscodePlan {
     pub jobs: Vec<PlannedJob>,
+    /// Files that were probed but skipped because they're already in the target format.
+    pub skipped_count: usize,
 }
 
 /// Plan a transcoding batch.
@@ -39,23 +41,29 @@ pub struct TranscodePlan {
 /// `inputs` is a flat list of audio files.
 /// `output_dir` is the root of the output tree (relative path structure is preserved).
 /// `source_root` is used to compute relative paths; defaults to the common prefix of inputs.
+/// `on_probed` is called after each file is probed: `(current_1_based, total, path, elapsed_ms)`.
 pub fn build_plan(
     inputs: &[PathBuf],
     profile: &DeviceProfile,
     output_dir: &Path,
     source_root: Option<&Path>,
+    mut on_probed: impl FnMut(usize, usize, &Path, u64),
 ) -> Result<TranscodePlan> {
+    let total = inputs.len();
     let mut jobs = Vec::new();
+    let mut skipped_count = 0usize;
 
-    for (_seq, input_path) in inputs.iter().enumerate() {
+    for (idx, input_path) in inputs.iter().enumerate() {
+        let probe_start = std::time::Instant::now();
         let source_info = probe_file(input_path)?;
+        let elapsed_ms = probe_start.elapsed().as_millis() as u64;
+
+        on_probed(idx + 1, total, input_path, elapsed_ms);
 
         // If already in the target format, skip (deterministic no-op detection)
         if source_info.matches_codec(&profile.codec, &profile.container) {
-            tracing::debug!(
-                path = ?input_path,
-                "skipping: already in target format"
-            );
+            tracing::debug!(path = ?input_path, "skipping: already in target format");
+            skipped_count += 1;
             continue;
         }
 
@@ -77,7 +85,7 @@ pub fn build_plan(
         });
     }
 
-    Ok(TranscodePlan { jobs })
+    Ok(TranscodePlan { jobs, skipped_count })
 }
 
 /// Convert a `TranscodePlan` (with assigned adapters) into a serializable `ExecutionGraph`.

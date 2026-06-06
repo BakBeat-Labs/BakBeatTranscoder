@@ -12,104 +12,94 @@
 use std::time::Instant;
 
 use anyhow::Result;
-use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::graph::ExecutionGraph;
+use crate::progress::{Emitter, Event, Phase};
 use crate::resolver::ResolvedCapabilities;
 use crate::verifier::{ArtifactRecord, ArtifactStatus, TranscodeManifest};
-
-pub struct ExecutorOptions {
-    pub show_progress: bool,
-    pub stop_on_error: bool,
-}
-
-impl Default for ExecutorOptions {
-    fn default() -> Self {
-        Self {
-            show_progress: true,
-            stop_on_error: false,
-        }
-    }
-}
 
 pub fn execute_graph(
     graph: &ExecutionGraph,
     caps: &ResolvedCapabilities,
-    opts: ExecutorOptions,
+    emitter: &mut Emitter,
+    stop_on_error: bool,
 ) -> Result<TranscodeManifest> {
-    let total = graph.nodes.len() as u64;
+    let total = graph.nodes.len();
 
-    let progress = if opts.show_progress && total > 0 {
-        let pb = ProgressBar::new(total);
-        pb.set_style(
-            ProgressStyle::with_template(
-                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
-            )
-            .unwrap()
-            .progress_chars("=>-"),
-        );
-        Some(pb)
-    } else {
-        None
-    };
+    emitter.emit(Event::PhaseStart {
+        phase: Phase::Encode,
+        total: Some(total),
+    });
 
     let batch_start = Instant::now();
-    let mut artifacts: Vec<ArtifactRecord> = Vec::with_capacity(graph.nodes.len());
+    let mut artifacts: Vec<ArtifactRecord> = Vec::with_capacity(total);
     let mut success_count = 0usize;
     let mut failure_count = 0usize;
 
-    for node in &graph.nodes {
-        if let Some(pb) = &progress {
-            pb.set_message(
-                node.input_path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-            );
-        }
+    for (idx, node) in graph.nodes.iter().enumerate() {
+        let current = idx + 1;
+
+        emitter.emit(Event::EncodeStart {
+            current,
+            total,
+            file: node.input_path.to_string_lossy().into_owned(),
+            output: node.output_path.to_string_lossy().into_owned(),
+        });
 
         let adapter = caps.adapters.get(&node.adapter).ok_or_else(|| {
             anyhow::anyhow!(
-                "adapter '{}' was assigned but is not available — this is a planner bug",
+                "adapter '{}' assigned but unavailable — planner bug",
                 node.adapter
             )
         })?;
 
         let encode_start = Instant::now();
         let result = adapter.encode(node);
-        let encode_elapsed_ms = encode_start.elapsed().as_millis() as u64;
+        let elapsed_ms = encode_start.elapsed().as_millis() as u64;
 
         let record = match result {
             Ok(info) => {
                 success_count += 1;
-                tracing::info!(
-                    output = ?info.output_path,
-                    elapsed_ms = encode_elapsed_ms,
-                    "encoded"
-                );
+                tracing::info!(output = ?info.output_path, elapsed_ms, "encoded");
+
+                emitter.emit(Event::FileComplete {
+                    phase: Phase::Encode,
+                    current,
+                    total,
+                    file: node.input_path.to_string_lossy().into_owned(),
+                    output: Some(info.output_path.to_string_lossy().into_owned()),
+                    elapsed_ms,
+                    success: true,
+                    error: None,
+                });
+
                 ArtifactRecord {
                     node_id: node.id,
                     output_path: info.output_path,
                     sha256: info.sha256,
                     size_bytes: info.size_bytes,
                     duration_ms: info.duration_ms,
-                    encode_elapsed_ms,
+                    encode_elapsed_ms: elapsed_ms,
                     verified_at: Some(chrono::Utc::now()),
                     status: ArtifactStatus::Success,
                 }
             }
             Err(e) => {
                 failure_count += 1;
-                tracing::error!(
-                    input = ?node.input_path,
-                    error = %e,
-                    "encode failed"
-                );
+                tracing::error!(input = ?node.input_path, error = %e, "encode failed");
 
-                if opts.stop_on_error {
-                    if let Some(pb) = progress {
-                        pb.abandon_with_message("aborted on error");
-                    }
+                emitter.emit(Event::FileComplete {
+                    phase: Phase::Encode,
+                    current,
+                    total,
+                    file: node.input_path.to_string_lossy().into_owned(),
+                    output: Some(node.output_path.to_string_lossy().into_owned()),
+                    elapsed_ms,
+                    success: false,
+                    error: Some(e.to_string()),
+                });
+
+                if stop_on_error {
                     return Err(e.into());
                 }
 
@@ -119,7 +109,7 @@ pub fn execute_graph(
                     sha256: String::new(),
                     size_bytes: 0,
                     duration_ms: None,
-                    encode_elapsed_ms,
+                    encode_elapsed_ms: elapsed_ms,
                     verified_at: None,
                     status: ArtifactStatus::Failed {
                         error: e.to_string(),
@@ -129,16 +119,16 @@ pub fn execute_graph(
         };
 
         artifacts.push(record);
-        if let Some(pb) = &progress {
-            pb.inc(1);
-        }
     }
 
-    if let Some(pb) = progress {
-        pb.finish_with_message(format!(
-            "done — {success_count} succeeded, {failure_count} failed"
-        ));
-    }
+    emitter.emit(Event::PhaseComplete {
+        phase: Phase::Encode,
+        total: Some(total),
+        jobs: None,
+        skipped: None,
+        success: Some(success_count),
+        failed: Some(failure_count),
+    });
 
     Ok(TranscodeManifest::new(
         graph.clone(),
