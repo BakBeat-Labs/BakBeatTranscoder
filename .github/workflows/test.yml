@@ -149,7 +149,7 @@ jobs:
         if: matrix.platform == 'macos-universal'
         run: |
           brew install libsndfile
-          git clone --depth 1 https://github.com/dcherednik/atracdenc.git atracdenc-src
+          git clone --depth 1 --recurse-submodules https://github.com/dcherednik/atracdenc.git atracdenc-src
           cmake -S atracdenc-src -B atracdenc-build -DCMAKE_BUILD_TYPE=Release
           cmake --build atracdenc-build --config Release
           BIN=$(find atracdenc-build -name "atracdenc" -not -name "*.cmake" -type f | head -1)
@@ -161,7 +161,7 @@ jobs:
         run: |
           # Static libsndfile via vcpkg — no extra DLL needed in the bundle
           vcpkg install libsndfile:x64-windows-static
-          git clone --depth 1 https://github.com/dcherednik/atracdenc.git atracdenc-src
+          git clone --depth 1 --recurse-submodules https://github.com/dcherednik/atracdenc.git atracdenc-src
           cmake -S atracdenc-src -B atracdenc-build `
             -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
@@ -175,7 +175,7 @@ jobs:
         if: matrix.platform == 'linux-x86_64'
         run: |
           sudo apt-get install -y cmake build-essential libsndfile1-dev
-          git clone --depth 1 https://github.com/dcherednik/atracdenc.git atracdenc-src
+          git clone --depth 1 --recurse-submodules https://github.com/dcherednik/atracdenc.git atracdenc-src
           cmake -S atracdenc-src -B atracdenc-build -DCMAKE_BUILD_TYPE=Release
           cmake --build atracdenc-build --config Release
           BIN=$(find atracdenc-build -name "atracdenc" -not -name "*.cmake" -type f | head -1)
