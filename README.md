@@ -6,46 +6,6 @@ The core guarantee: identical inputs with identical parameters always produce id
 
 ---
 
-## Releasing
-
-Two workflows live in `.github/workflows/`:
-
-**`test.yml`** — triggered manually (`Actions → Test Build → Run workflow`). Builds all platforms unsigned and uploads archives as artifacts for 3 days. Run this to validate the full pipeline before spending signing quota.
-
-**`deploy.yml`** — triggered by pushing a version tag. Builds, signs, and creates a GitHub Release.
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-### Required GitHub secrets
-
-Configure these in `Settings → Secrets and variables → Actions` before running `deploy.yml`.
-
-**Windows — SSL.com eSigner** (same service as NetShift):
-
-| Secret | Description |
-|---|---|
-| `ESIGNER_USERNAME` | SSL.com account username |
-| `ESIGNER_PASSWORD` | SSL.com account password |
-| `ESIGNER_CREDENTIAL_ID` | Certificate credential ID from SSL.com dashboard |
-| `ESIGNER_TOTP_SECRET` | TOTP secret for 2FA |
-
-**macOS — Apple Developer ID** (SSL.com certs cannot be used for Apple Gatekeeper notarization — Apple requires Developer ID certificates from the Apple Developer Program):
-
-| Secret | Description |
-|---|---|
-| `MACOS_CERTIFICATE` | Base64-encoded Developer ID Application `.p12` certificate |
-| `MACOS_CERTIFICATE_PWD` | Password for the `.p12` certificate |
-| `KEYCHAIN_PASSWORD` | Any strong password for the temporary CI keychain |
-| `APPLE_DEVELOPER_IDENTITY` | Full identity string, e.g. `Developer ID Application: Mike Becker (TEAMID)` |
-| `APPLE_ID` | Apple ID email used for notarization |
-| `APPLE_APP_PASSWORD` | App-specific password generated at appleid.apple.com |
-| `APPLE_TEAM_ID` | 10-character Apple Developer Team ID |
-
----
-
 ## How it works
 
 Transcoding runs through five phases in order:
