@@ -1,6 +1,6 @@
 # BakBeat Transcoder
 
-Deterministic audio and video transcoder for device sync. Part of the [BakBeat](https://github.com/BakBeat) ecosystem, open source under MPL-2.0.
+Deterministic audio and video transcoder for device sync. Part of the [BakBeat](https://bakbeat.com) ecosystem, open source under MPL-2.0.
 
 The core guarantee: identical inputs with identical parameters always produce identical outputs. Every run is fully planned before any encoding starts, and every output is verified against a SHA-256 manifest.
 
