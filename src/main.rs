@@ -7,6 +7,7 @@ mod binaries;
 mod cli;
 mod error;
 mod executor;
+mod gapless;
 mod graph;
 mod planner;
 mod probe;
@@ -260,21 +261,8 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
 
     // Re-validate: adapter availability may have changed since plan time
     let dummy_jobs: Vec<planner::PlannedJob> = graph.nodes.iter().map(|n| {
-        use planner::PlannedJob;
-        use probe::{AudioInfo, MediaInfo};
-        PlannedJob {
+        planner::PlannedJob {
             source_path: n.input_path.clone(),
-            source_info: MediaInfo::Audio(AudioInfo {
-                path: n.input_path.clone(),
-                container: String::new(),
-                codec: String::new(),
-                sample_rate_hz: None,
-                channels: None,
-                bits_per_sample: None,
-                duration_secs: None,
-                bitrate_kbps: None,
-                tags: std::collections::BTreeMap::new(),
-            }),
             output_path: n.output_path.clone(),
             params: n.params.clone(),
             assigned_adapter: Some(n.adapter.clone()),
@@ -381,20 +369,8 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
 
     // Build dummy jobs for capability validation using the graph nodes
     let dummy_jobs: Vec<planner::PlannedJob> = prior.graph.nodes.iter().map(|n| {
-        use probe::{AudioInfo, MediaInfo};
         planner::PlannedJob {
             source_path: n.input_path.clone(),
-            source_info: MediaInfo::Audio(AudioInfo {
-                path: n.input_path.clone(),
-                container: String::new(),
-                codec: String::new(),
-                sample_rate_hz: None,
-                channels: None,
-                bits_per_sample: None,
-                duration_secs: None,
-                bitrate_kbps: None,
-                tags: std::collections::BTreeMap::new(),
-            }),
             output_path: n.output_path.clone(),
             params: n.params.clone(),
             assigned_adapter: Some(n.adapter.clone()),

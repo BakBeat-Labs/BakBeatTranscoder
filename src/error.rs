@@ -7,15 +7,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum BbtError {
-    #[error("file not found: {0}")]
-    FileNotFound(PathBuf),
-
-    #[error("probe failed for {path}: {reason}")]
-    ProbeFailed { path: PathBuf, reason: String },
-
-    #[error("no audio track found in {0}")]
-    NoAudioTrack(PathBuf),
-
     #[error("profile not found: '{0}'")]
     ProfileNotFound(String),
 
@@ -24,9 +15,6 @@ pub enum BbtError {
 
     #[error("capability resolver: {0}")]
     CapabilityError(String),
-
-    #[error("no adapter can encode to codec '{codec}' (available: {available})")]
-    NoAdapterForCodec { codec: String, available: String },
 
     #[error("graph file not found: {0}")]
     GraphNotFound(PathBuf),

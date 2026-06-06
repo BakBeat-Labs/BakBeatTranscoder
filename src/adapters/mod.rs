@@ -30,8 +30,6 @@ pub struct ArtifactInfo {
 /// Adapters must be Send + Sync — the graph executor will run them
 /// across threads when concurrency is enabled in a future release.
 pub trait EncoderAdapter: Send + Sync {
-    fn name(&self) -> &str;
-
     /// Codec strings this adapter can produce (e.g. ["mp3", "aac", "flac"])
     fn supported_output_codecs(&self) -> &[&str];
 

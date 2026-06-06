@@ -119,16 +119,3 @@ impl ResolvedCapabilities {
     }
 }
 
-/// Print a human-readable capability summary to stdout.
-pub fn print_capability_summary(caps: &ResolvedCapabilities) {
-    println!("Encoder adapters:");
-    for (name, adapter) in &caps.adapters {
-        let codecs = adapter.supported_output_codecs().join(", ");
-        println!("  {name}: available (codecs: {codecs})");
-    }
-    for name in ["ffmpeg", "atrac"] {
-        if !caps.adapters.contains_key(name) {
-            println!("  {name}: not found");
-        }
-    }
-}

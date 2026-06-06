@@ -51,6 +51,10 @@ pub struct AudioInfo {
     pub channels: Option<u8>,
     pub bits_per_sample: Option<u32>,
     pub duration_secs: Option<f64>,
+    /// Total frame count from the container (includes encoder priming + trailing padding for AAC).
+    /// Used for gapless trim calculations when iTunSMPB total_pcm_samples is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_frames: Option<u64>,
     /// Approximate bitrate in kbps estimated from file size and duration
     pub bitrate_kbps: Option<u32>,
     pub tags: BTreeMap<String, String>,
@@ -91,34 +95,6 @@ pub struct AudioStream {
 // ── MediaInfo helpers ─────────────────────────────────────────────────────────
 
 impl MediaInfo {
-    pub fn path(&self) -> &Path {
-        match self {
-            Self::Audio(a) => &a.path,
-            Self::Video(v) => &v.path,
-        }
-    }
-
-    pub fn container(&self) -> &str {
-        match self {
-            Self::Audio(a) => &a.container,
-            Self::Video(v) => &v.container,
-        }
-    }
-
-    pub fn duration_secs(&self) -> Option<f64> {
-        match self {
-            Self::Audio(a) => a.duration_secs,
-            Self::Video(v) => v.duration_secs,
-        }
-    }
-
-    pub fn tags(&self) -> &BTreeMap<String, String> {
-        match self {
-            Self::Audio(a) => &a.tags,
-            Self::Video(v) => &v.tags,
-        }
-    }
-
     /// Whether this file already matches a device profile's target format.
     /// Used by the planner to skip no-op transcodes.
     pub fn already_matches_profile(&self, profile: &DeviceProfile) -> bool {
@@ -204,8 +180,8 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
     let bits_per_sample = codec_params
         .bits_per_sample
         .or(codec_params.bits_per_coded_sample);
-    let duration_secs = codec_params
-        .n_frames
+    let n_frames = codec_params.n_frames;
+    let duration_secs = n_frames
         .zip(codec_params.sample_rate)
         .map(|(frames, rate)| frames as f64 / rate as f64);
     let bitrate_kbps = duration_secs
@@ -244,6 +220,7 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
         channels,
         bits_per_sample,
         duration_secs,
+        n_frames,
         bitrate_kbps,
         tags,
     })

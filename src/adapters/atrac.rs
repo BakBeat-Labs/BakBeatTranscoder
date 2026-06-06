@@ -132,10 +132,6 @@ impl AtracAdapter {
 }
 
 impl EncoderAdapter for AtracAdapter {
-    fn name(&self) -> &str {
-        "atrac"
-    }
-
     fn supported_output_codecs(&self) -> &[&str] {
         &["atrac1", "atrac3", "atrac3p"]
     }

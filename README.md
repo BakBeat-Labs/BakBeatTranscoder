@@ -279,6 +279,46 @@ Omitting `width`, `height`, or `frame_rate` preserves the source file's values.
 
 ---
 
+## SP canonical WAV materialization
+
+When decoding AAC/M4A to PCM WAV (`--codec pcm_s16le --container wav`), bbt honors **iTunSMPB** gapless metadata to produce frame counts that match Apple's `afconvert` / CoreAudio — the reference for BakBeat's MiniDisc SP write path.
+
+### What bbt does
+
+AAC encoders add a silent priming block at the start and a silent trailing padding block at the end. The iTunSMPB tag records how many samples each block contains, plus the authoritative total of valid PCM samples.
+
+- **Encoder delay (priming):** handled automatically by ffmpeg via `start_pts` — bbt does not double-trim.
+- **Trailing padding:** bbt reads iTunSMPB word 2 (`trailing_padding_samples`). When non-zero, it applies `atrim=end_sample=N` to strip those samples before writing the WAV.
+- **Authoritative length:** when iTunSMPB word 3 (`total_pcm_samples`) is present, bbt uses it as the trim target directly — this matches afconvert's output for every known fixture.
+- **When iTunSMPB is absent:** no trim is applied. Lossless sources (FLAC, ALAC) are not affected.
+
+### Example — dbpoweramp M4A with iTunSMPB
+
+```
+iTunSMPB: 00000000 00000840 000003C8 0000000000AE13F8
+                   ↑        ↑        ↑
+                   2112     968      11408376
+                   delay    trailing total_pcm
+```
+
+| Encoder | Output frames |
+|---|---|
+| `afconvert` | 11,408,376 ✓ |
+| ffmpeg (no trim) | 11,409,344 ✗ (+968 trailing) |
+| bbt (with trim) | 11,408,376 ✓ |
+
+The `gapless_trim` decision is recorded in the execution graph JSON for auditability:
+
+```json
+"gapless_trim": {
+  "encoder_delay": 2112,
+  "trailing_padding": 968,
+  "output_frames": 11408376
+}
+```
+
+---
+
 ## JSON output
 
 Pass `--json` to any command to receive machine-readable NDJSON on stdout — one complete JSON event per line. Designed for programmatic consumers like BakBeat's status lane.

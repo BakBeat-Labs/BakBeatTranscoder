@@ -92,6 +92,16 @@ impl FfmpegAdapter {
         args.extend(["-ar".into(), p.sample_rate_hz.to_string()]);
         args.extend(["-ac".into(), p.channels.to_string()]);
 
+        // Strip iTunSMPB trailing padding so output frame count matches afconvert.
+        // `atrim=end_sample=N` sees the post-start_pts stream (priming already removed).
+        // `asetpts=PTS-STARTPTS` resets timestamps to start at 0 after the trim.
+        if let Some(trim) = &p.gapless_trim {
+            args.extend([
+                "-af".into(),
+                format!("atrim=end_sample={},asetpts=PTS-STARTPTS", trim.output_frames),
+            ]);
+        }
+
         for (k, v) in &p.extra {
             args.push(format!("-{k}"));
             if !v.is_empty() {
@@ -106,10 +116,6 @@ impl FfmpegAdapter {
 }
 
 impl EncoderAdapter for FfmpegAdapter {
-    fn name(&self) -> &str {
-        "ffmpeg"
-    }
-
     fn supported_output_codecs(&self) -> &[&str] {
         &[
             // Audio

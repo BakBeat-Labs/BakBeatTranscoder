@@ -28,6 +28,18 @@ pub enum MediaType {
     Video,
 }
 
+/// iTunSMPB-derived gapless trim to apply when decoding AAC/M4A to canonical WAV.
+/// Ensures output frame count matches CoreAudio / afconvert semantics.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GaplessTrim {
+    /// Encoder priming samples (already handled by ffmpeg start_pts; recorded for auditability).
+    pub encoder_delay: u64,
+    /// Trailing padding samples stripped from the decoded output.
+    pub trailing_padding: u64,
+    /// Target output frame count (equals iTunSMPB word 3 when present).
+    pub output_frames: u64,
+}
+
 /// A fully resolved, serializable transcoding plan ready for execution.
 /// Saved as JSON — canonical ordering matters for stable hashing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +106,12 @@ pub struct EncodeParams {
     /// FFmpeg pixel format string (e.g. "yuv420p"). None = let FFmpeg decide.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pixel_format: Option<String>,
+
+    // ── Gapless trim (AAC/M4A → WAV only) ────────────────────────────────────
+    /// When set, the ffmpeg adapter applies `atrim=end_sample={output_frames}`
+    /// to strip iTunSMPB trailing padding and match afconvert frame count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gapless_trim: Option<GaplessTrim>,
 
     // ── Adapter-specific overrides ────────────────────────────────────────────
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
