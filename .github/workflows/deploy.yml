@@ -112,15 +112,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # BtbN LGPL essentials — no GPL codecs.
-          # BtbN marks all releases as pre-releases so gh release download skips them.
-          # Use the API directly: releases[0] is always the most recent regardless of flag.
           $releases = Invoke-RestMethod `
             -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases" `
             -Headers @{Authorization = "Bearer $env:GH_TOKEN"}
-          $asset = $releases[0].assets `
-            | Where-Object { $_.name -match "win64-lgpl-essentials" } `
-            | Select-Object -First 1
-          if (-not $asset) { Write-Error "No win64-lgpl-essentials asset found"; exit 1 }
+          Write-Host "=== Latest BtbN release: $($releases[0].tag_name) ==="
+          $releases[0].assets | ForEach-Object { Write-Host "  $($_.name)" }
+          $asset = $null
+          foreach ($rel in $releases) {
+            $asset = $rel.assets | Where-Object { $_.name -match "win64" -and $_.name -match "lgpl" } | Select-Object -First 1
+            if ($asset) { break }
+          }
+          if (-not $asset) { Write-Error "No win64 lgpl asset found in recent BtbN releases"; exit 1 }
           Write-Host "Downloading $($asset.name)"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg-win.zip
           Expand-Archive ffmpeg-win.zip -DestinationPath ffmpeg-tmp
@@ -147,7 +149,9 @@ jobs:
         run: |
           brew install libsndfile
           git clone --depth 1 --recurse-submodules https://github.com/dcherednik/atracdenc.git atracdenc-src
-          cmake -S atracdenc-src -B atracdenc-build -DCMAKE_BUILD_TYPE=Release
+          cmake -S atracdenc-src -B atracdenc-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64
           cmake --build atracdenc-build --config Release
           BIN=$(find atracdenc-build -name "atracdenc" -not -name "*.cmake" -type f | head -1)
           cp "$BIN" dist/atracdenc
