@@ -90,8 +90,6 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
                 file: path.to_string_lossy().into_owned(),
                 output: None,
                 elapsed_ms,
-                success: true,
-                error: None,
             });
         },
     )?;
@@ -128,7 +126,13 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
     // Phase 2: Resolve capabilities
     emitter.emit(Event::PhaseStart { phase: Phase::Resolve, total: None });
     let caps = resolver::ResolvedCapabilities::detect();
-    caps.validate_plan(&plan.jobs)?;
+    if let Err(e) = caps.validate_plan(&plan.jobs) {
+        emitter.emit(Event::OperationFailed {
+            phase: Some(Phase::Resolve),
+            error: e.to_string(),
+        });
+        return Err(e);
+    }
     caps.assign_adapters(&mut plan.jobs);
     emitter.emit(Event::PhaseComplete {
         phase: Phase::Resolve,
@@ -193,8 +197,6 @@ fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
                 file: path.to_string_lossy().into_owned(),
                 output: None,
                 elapsed_ms,
-                success: true,
-                error: None,
             });
         },
     )?;

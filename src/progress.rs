@@ -8,6 +8,13 @@
 //! BakBeat reads this line-by-line and maps it to its status lane.
 //!
 //! In human mode: indicatif progress bars on stderr, summary on stdout.
+//!
+//! Failure taxonomy:
+//!   file_failed      — a single file could not be processed; batch may continue
+//!   operation_failed — the entire operation is aborting; no further work will happen
+//!
+//! file_complete is always a success. Consumers can filter on type without
+//! inspecting boolean fields.
 
 use std::path::Path;
 
@@ -38,7 +45,8 @@ pub enum Event {
         total: Option<usize>,
     },
 
-    /// A file was processed within a phase.
+    /// A file was successfully processed within a phase.
+    /// Always indicates success — see file_failed for the failure case.
     FileComplete {
         phase: Phase,
         current: usize,
@@ -47,9 +55,19 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<String>,
         elapsed_ms: u64,
-        success: bool,
+    },
+
+    /// A file could not be processed. The batch may continue depending on
+    /// --stop-on-error. Subsequent files are still attempted unless aborted.
+    FileFailed {
+        phase: Phase,
+        current: usize,
+        total: usize,
+        file: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        output: Option<String>,
+        elapsed_ms: u64,
+        error: String,
     },
 
     /// Encoding of a specific file is starting (encode phase only).
@@ -61,7 +79,7 @@ pub enum Event {
         output: String,
     },
 
-    /// A pipeline phase completed.
+    /// A pipeline phase completed (possibly with some file failures).
     PhaseComplete {
         phase: Phase,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,6 +92,15 @@ pub enum Event {
         success: Option<usize>,
         #[serde(skip_serializing_if = "Option::is_none")]
         failed: Option<usize>,
+    },
+
+    /// The entire operation is aborting. No further events will be emitted.
+    /// Caused by --stop-on-error, a capability failure, or an unrecoverable error.
+    OperationFailed {
+        /// Phase in which the failure occurred, if known.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        phase: Option<Phase>,
+        error: String,
     },
 
     /// All phases complete. Final summary event.
@@ -115,7 +142,6 @@ impl Emitter {
     fn render_human(&mut self, event: Event) {
         match event {
             Event::PhaseStart { phase, total } => {
-                // Finish any previous bar
                 if let Some(bar) = self.bar.take() {
                     bar.finish_and_clear();
                 }
@@ -131,12 +157,8 @@ impl Emitter {
                         );
                         self.bar = Some(bar);
                     }
-                    Phase::Plan => {
-                        eprint!("  Planning...");
-                    }
-                    Phase::Resolve => {
-                        eprint!("  Checking capabilities...");
-                    }
+                    Phase::Plan => eprint!("  Planning..."),
+                    Phase::Resolve => eprint!("  Checking capabilities..."),
                     Phase::Encode => {
                         let n = total.unwrap_or(0) as u64;
                         let bar = ProgressBar::new(n);
@@ -153,76 +175,51 @@ impl Emitter {
                 }
             }
 
-            Event::FileComplete {
-                phase,
-                file,
-                success,
-                error,
-                ..
-            } => match phase {
-                Phase::Probe => {
+            Event::FileComplete { phase, file, .. } => match phase {
+                Phase::Probe | Phase::Encode => {
                     if let Some(bar) = &self.bar {
-                        let name = Path::new(&file)
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default();
+                        let name = filename(&file);
                         bar.set_message(name);
                         bar.inc(1);
-                    }
-                }
-                Phase::Encode => {
-                    if let Some(bar) = &self.bar {
-                        bar.inc(1);
-                    }
-                    if !success {
-                        if let Some(e) = error {
-                            eprintln!("\n  error: {e}");
-                        }
                     }
                 }
                 _ => {}
             },
 
+            Event::FileFailed { phase, file, error, .. } => {
+                match phase {
+                    Phase::Encode => {
+                        if let Some(bar) = &self.bar {
+                            bar.inc(1);
+                        }
+                    }
+                    _ => {}
+                }
+                eprintln!("\n  FAILED  {}  —  {error}", filename(&file));
+            }
+
             Event::EncodeStart { file, .. } => {
                 if let Some(bar) = &self.bar {
-                    let name = Path::new(&file)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    bar.set_message(name);
+                    bar.set_message(filename(&file));
                 }
             }
 
-            Event::PhaseComplete {
-                phase,
-                jobs,
-                skipped,
-                success,
-                failed,
-                ..
-            } => {
+            Event::PhaseComplete { phase, jobs, skipped, success, failed, .. } => {
                 if let Some(bar) = self.bar.take() {
                     bar.finish_and_clear();
                 }
                 match phase {
-                    Phase::Probe => {
-                        // probe completion is implicit — plan will report counts
-                    }
+                    Phase::Probe => {}
                     Phase::Plan => {
                         let j = jobs.unwrap_or(0);
                         let s = skipped.unwrap_or(0);
                         eprintln!(
                             " {j} to transcode{}",
-                            if s > 0 {
-                                format!(", {s} already in target format")
-                            } else {
-                                String::new()
-                            }
+                            if s > 0 { format!(", {s} already in target format") }
+                            else { String::new() }
                         );
                     }
-                    Phase::Resolve => {
-                        eprintln!(" ok");
-                    }
+                    Phase::Resolve => eprintln!(" ok"),
                     Phase::Encode => {
                         let ok = success.unwrap_or(0);
                         let fail = failed.unwrap_or(0);
@@ -231,12 +228,17 @@ impl Emitter {
                 }
             }
 
-            Event::Complete {
-                success,
-                failed,
-                total_elapsed_ms,
-                manifest,
-            } => {
+            Event::OperationFailed { phase, error } => {
+                if let Some(bar) = self.bar.take() {
+                    bar.abandon_with_message("operation failed");
+                }
+                let where_ = phase
+                    .map(|p| format!(" (during {p:?})").to_lowercase())
+                    .unwrap_or_default();
+                eprintln!("\n  operation failed{where_}: {error}");
+            }
+
+            Event::Complete { success, failed, total_elapsed_ms, manifest } => {
                 if let Some(bar) = self.bar.take() {
                     bar.finish_and_clear();
                 }
@@ -247,4 +249,11 @@ impl Emitter {
             }
         }
     }
+}
+
+fn filename(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_owned())
 }

@@ -69,8 +69,6 @@ pub fn execute_graph(
                     file: node.input_path.to_string_lossy().into_owned(),
                     output: Some(info.output_path.to_string_lossy().into_owned()),
                     elapsed_ms,
-                    success: true,
-                    error: None,
                 });
 
                 ArtifactRecord {
@@ -88,18 +86,21 @@ pub fn execute_graph(
                 failure_count += 1;
                 tracing::error!(input = ?node.input_path, error = %e, "encode failed");
 
-                emitter.emit(Event::FileComplete {
+                emitter.emit(Event::FileFailed {
                     phase: Phase::Encode,
                     current,
                     total,
                     file: node.input_path.to_string_lossy().into_owned(),
                     output: Some(node.output_path.to_string_lossy().into_owned()),
                     elapsed_ms,
-                    success: false,
-                    error: Some(e.to_string()),
+                    error: e.to_string(),
                 });
 
                 if stop_on_error {
+                    emitter.emit(Event::OperationFailed {
+                        phase: Some(Phase::Encode),
+                        error: format!("aborted after failure: {e}"),
+                    });
                     return Err(e.into());
                 }
 
