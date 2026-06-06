@@ -231,16 +231,12 @@ jobs:
           ls -lh dist/
           cd dist
           tar -czf ../${{ matrix.archive }} .
-          cd ..
-          echo "Archive contents:"
-          tar -tzf ${{ matrix.archive }}
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           Get-ChildItem dist\
           Compress-Archive -Path dist\* -DestinationPath ${{ matrix.archive }}
-          Write-Host "Archive created: ${{ matrix.archive }}"
         shell: powershell
 
       # ── Upload artifact ────────────────────────────────────────────────────
