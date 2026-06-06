@@ -108,11 +108,18 @@ jobs:
 
       - name: Bundle FFmpeg (Windows)
         if: matrix.platform == 'windows-x86_64'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-essentials.zip"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg-win.zip
-          Expand-Archive ffmpeg-win.zip -DestinationPath ffmpeg-tmp
-          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName dist\ffmpeg.exe
+          # BtbN uses dated autobuild tags — gh CLI resolves the actual latest.
+          gh release download `
+            --repo BtbN/FFmpeg-Builds `
+            --pattern "*win64-lgpl-essentials*.zip" `
+            --dir . `
+            --clobber
+          $zip = Get-ChildItem -Filter "*win64-lgpl-essentials*.zip" | Select-Object -First 1
+          Expand-Archive $zip.Name -DestinationPath ffmpeg-tmp
+          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffmpeg.exe  | Select-Object -First 1).FullName dist\ffmpeg.exe
           Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName dist\ffprobe.exe
         shell: powershell
 
