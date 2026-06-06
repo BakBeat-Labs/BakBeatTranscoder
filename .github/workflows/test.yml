@@ -1,0 +1,205 @@
+name: Test Build
+
+# Manual trigger only — for validating the full pipeline before a real release.
+# Produces unsigned archives for all platforms. Artifacts are kept for 3 days.
+# Verify these thoroughly before triggering deploy.yml (which spends signing quota).
+
+on:
+  workflow_dispatch:
+
+env:
+  SIGN_CODE: "false"
+  APP_VERSION: "0.0.0-dev"
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS Universal Binary (arm64 + x86_64 combined via lipo)
+          - platform: macos-universal
+            runner: macos-latest
+            archive: bbt-macos-universal.tar.gz
+
+          # Windows x86_64
+          - platform: windows-x86_64
+            runner: windows-latest
+            archive: bbt-windows-x86_64.zip
+
+          # Linux x86_64 (musl static — no glibc dependency)
+          - platform: linux-x86_64
+            runner: ubuntu-latest
+            archive: bbt-linux-x86_64.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Rust ────────────────────────────────────────────────────────────────
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add macOS targets (arm64 + x86_64 for Universal Binary)
+        if: matrix.platform == 'macos-universal'
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
+
+      - name: Add Linux musl target
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get install -y musl-tools
+
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ matrix.platform }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ matrix.platform }}-cargo-
+
+      # ── Build bbt ──────────────────────────────────────────────────────────
+
+      - name: Build bbt (macOS Universal)
+        if: matrix.platform == 'macos-universal'
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p dist
+          lipo -create \
+            target/aarch64-apple-darwin/release/bbt \
+            target/x86_64-apple-darwin/release/bbt \
+            -output dist/bbt
+
+      - name: Build bbt (Windows)
+        if: matrix.platform == 'windows-x86_64'
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target\x86_64-pc-windows-msvc\release\bbt.exe dist\bbt.exe
+        shell: powershell
+
+      - name: Build bbt (Linux)
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          cargo build --release --target x86_64-unknown-linux-musl
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/bbt dist/bbt
+
+      # ── Bundle FFmpeg + ffprobe ────────────────────────────────────────────
+      # Static builds only — dynamically linked binaries won't work on end-user machines.
+      # Sources: evermeet.cx (macOS), BtbN LGPL essentials (Windows), johnvansickle (Linux).
+      # LGPL-only builds — no GPL codecs bundled. See README for licensing details.
+
+      - name: Bundle FFmpeg (macOS)
+        if: matrix.platform == 'macos-universal'
+        run: |
+          # evermeet.cx provides static macOS builds (arm64)
+          curl -fSL "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip" -o ffmpeg.zip
+          curl -fSL "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip" -o ffprobe.zip
+          unzip -j ffmpeg.zip ffmpeg -d dist/
+          unzip -j ffprobe.zip ffprobe -d dist/
+          chmod +x dist/ffmpeg dist/ffprobe
+
+      - name: Bundle FFmpeg (Windows)
+        if: matrix.platform == 'windows-x86_64'
+        run: |
+          # BtbN LGPL essentials — no GPL codecs
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-essentials.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg-win.zip
+          Expand-Archive ffmpeg-win.zip -DestinationPath ffmpeg-tmp
+          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName dist\ffmpeg.exe
+          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName dist\ffprobe.exe
+        shell: powershell
+
+      - name: Bundle FFmpeg (Linux)
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          # johnvansickle.com static builds
+          curl -fSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -o ffmpeg.tar.xz
+          tar -xJf ffmpeg.tar.xz
+          cp ffmpeg-*-amd64-static/ffmpeg dist/ffmpeg
+          cp ffmpeg-*-amd64-static/ffprobe dist/ffprobe
+          chmod +x dist/ffmpeg dist/ffprobe
+
+      # ── Build atracdenc from source ────────────────────────────────────────
+      # No reliable pre-built binaries available cross-platform, so we build from
+      # the official open-source repo. LGPL licensed.
+
+      - name: Build atracdenc (macOS)
+        if: matrix.platform == 'macos-universal'
+        run: |
+          git clone --depth 1 https://github.com/dcherednik/atracdenc.git atracdenc-src
+          # arm64
+          cmake -S atracdenc-src -B atracdenc-build-arm64 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64
+          cmake --build atracdenc-build-arm64 --config Release
+          # x86_64
+          cmake -S atracdenc-src -B atracdenc-build-x86 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64
+          cmake --build atracdenc-build-x86 --config Release
+          # Universal Binary
+          ARM=$(find atracdenc-build-arm64 -name "atracdenc" -not -name "*.cmake" -type f | head -1)
+          X86=$(find atracdenc-build-x86  -name "atracdenc" -not -name "*.cmake" -type f | head -1)
+          lipo -create "$ARM" "$X86" -output dist/atracdenc
+          chmod +x dist/atracdenc
+
+      - name: Build atracdenc (Windows)
+        if: matrix.platform == 'windows-x86_64'
+        run: |
+          git clone --depth 1 https://github.com/dcherednik/atracdenc.git atracdenc-src
+          cmake -S atracdenc-src -B atracdenc-build `
+            -G "Visual Studio 17 2022" -A x64
+          cmake --build atracdenc-build --config Release
+          $exe = Get-ChildItem atracdenc-build -Recurse -Filter "atracdenc.exe" | Select-Object -First 1
+          Copy-Item $exe.FullName dist\atracdenc.exe
+        shell: powershell
+
+      - name: Build atracdenc (Linux)
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          sudo apt-get install -y cmake build-essential
+          git clone --depth 1 https://github.com/dcherednik/atracdenc.git atracdenc-src
+          cmake -S atracdenc-src -B atracdenc-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build atracdenc-build --config Release
+          BIN=$(find atracdenc-build -name "atracdenc" -not -name "*.cmake" -type f | head -1)
+          cp "$BIN" dist/atracdenc
+          chmod +x dist/atracdenc
+
+      # ── Package ────────────────────────────────────────────────────────────
+
+      - name: Package (macOS / Linux)
+        if: runner.os != 'Windows'
+        run: |
+          ls -lh dist/
+          cd dist
+          tar -czf ../${{ matrix.archive }} .
+          cd ..
+          echo "Archive contents:"
+          tar -tzf ${{ matrix.archive }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Get-ChildItem dist\
+          Compress-Archive -Path dist\* -DestinationPath ${{ matrix.archive }}
+          Write-Host "Archive created: ${{ matrix.archive }}"
+        shell: powershell
+
+      # ── Upload artifact ────────────────────────────────────────────────────
+
+      - name: Upload test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: ${{ matrix.archive }}
+          retention-days: 3
