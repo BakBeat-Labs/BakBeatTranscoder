@@ -23,11 +23,12 @@ use tempfile::TempDir;
 use tracing::{debug, trace};
 
 use crate::adapters::{ensure_parent, sha256_file, ArtifactInfo, EncoderAdapter};
+use crate::binaries;
 use crate::error::AdapterError;
 use crate::graph::ExecutionNode;
 
 pub struct AtracAdapter {
-    /// atracdenc binary (preferred, open source)
+    /// atracdenc binary (preferred, open source, LGPL)
     atracdenc: Option<PathBuf>,
     /// atracenc binary (Sony, fallback)
     atracenc: Option<PathBuf>,
@@ -38,9 +39,9 @@ pub struct AtracAdapter {
 impl AtracAdapter {
     pub fn detect() -> Self {
         Self {
-            atracdenc: which::which("atracdenc").ok(),
-            atracenc: which::which("atracenc").ok(),
-            ffmpeg: which::which("ffmpeg").ok(),
+            atracdenc: binaries::find_atracdenc(),
+            atracenc: None, // find_atracdenc() already checks atracenc as fallback
+            ffmpeg: binaries::find_ffmpeg(),
         }
     }
 

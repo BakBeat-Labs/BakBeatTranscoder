@@ -30,14 +30,22 @@ The manifest is the ground truth record of what was produced. You can re-verify 
 
 ## Prerequisites
 
-**Required for most transcoding:**
-- [FFmpeg](https://ffmpeg.org) — must be in your PATH. Handles MP3, AAC, FLAC, OGG, Opus, ALAC, WAV, and video encoding.
+**If you're using BakBeat:** FFmpeg, ffprobe, and atracdenc are bundled with the app. No manual installation needed.
 
-**Required for MiniDisc ATRAC encoding:**
-- [atracdenc](https://github.com/dcherednik/atracdenc) — open source ATRAC encoder, must be in your PATH.
+**If you're using `bbt` standalone:**
 
-**Required for video probing:**
-- ffprobe — ships with FFmpeg, no separate install needed.
+- [FFmpeg](https://ffmpeg.org) — required for most transcoding (MP3, AAC, FLAC, OGG, Opus, ALAC, WAV, video). ffprobe ships alongside it and is used for video probing.
+- [atracdenc](https://github.com/dcherednik/atracdenc) — required for MiniDisc ATRAC encoding (SP, LP2, LP4).
+
+Install via your package manager, or drop the binaries in the same directory as `bbt` and they'll be found automatically.
+
+**Overriding binary paths** — useful if you have multiple FFmpeg versions or need to point at a specific build:
+
+```bash
+export BBT_FFMPEG_PATH=/usr/local/bin/ffmpeg
+export BBT_FFPROBE_PATH=/usr/local/bin/ffprobe
+export BBT_ATRACDENC_PATH=/opt/atrac/atracdenc
+```
 
 ---
 
@@ -348,4 +356,6 @@ Re-run failures: `bbt resume manifest.json`
 
 Mozilla Public License 2.0 — see [LICENSE](LICENSE).
 
-FFmpeg and ffprobe are called as external subprocesses and are not bundled. Users provide their own installation. atracdenc is similarly external. This keeps licensing clean: MPL-2.0 applies to this codebase only.
+FFmpeg, ffprobe, and atracdenc are called as external subprocesses — never statically or dynamically linked. BakBeat ships bundled copies of these tools alongside `bbt`; standalone users can install them separately or drop binaries next to `bbt`.
+
+Subprocess-only invocation keeps the licensing boundary clean: FFmpeg and atracdenc are LGPL; calling a binary as a subprocess does not create a derivative work. BakBeat attributes these tools in its credits and includes their licenses in the distribution, satisfying LGPL requirements. MPL-2.0 applies to this codebase only.

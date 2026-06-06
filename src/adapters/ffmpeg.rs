@@ -17,6 +17,7 @@ use std::process::Command;
 use tracing::{debug, trace};
 
 use crate::adapters::{ensure_parent, sha256_file, ArtifactInfo, EncoderAdapter};
+use crate::binaries;
 use crate::error::AdapterError;
 use crate::graph::{ExecutionNode, MediaType};
 
@@ -26,7 +27,7 @@ pub struct FfmpegAdapter {
 
 impl FfmpegAdapter {
     pub fn detect() -> Option<Self> {
-        which::which("ffmpeg").ok().map(|p| Self { binary: p })
+        binaries::find_ffmpeg().map(|p| Self { binary: p })
     }
 
     fn build_args(&self, node: &ExecutionNode) -> Result<Vec<String>, AdapterError> {

@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 mod adapters;
+mod binaries;
 mod cli;
 mod error;
 mod executor;
@@ -554,16 +555,34 @@ fn cmd_profiles(args: cli::ProfilesArgs, json: bool) -> Result<()> {
 // ── check ─────────────────────────────────────────────────────────────────────
 
 fn cmd_check(json: bool) -> Result<()> {
+    let bins = binaries::BinaryPaths::detect();
     let caps = resolver::ResolvedCapabilities::detect();
 
     if json {
         let info: serde_json::Value = serde_json::json!({
-            "ffmpeg": caps.has_adapter("ffmpeg"),
-            "atrac": caps.has_adapter("atrac"),
+            "ffmpeg":    { "available": bins.ffmpeg.is_some(),   "path": bins.ffmpeg },
+            "ffprobe":   { "available": bins.ffprobe.is_some(),  "path": bins.ffprobe },
+            "atracdenc": { "available": bins.atracdenc.is_some(),"path": bins.atracdenc },
         });
         println!("{}", serde_json::to_string_pretty(&info)?);
     } else {
-        resolver::print_capability_summary(&caps);
+        let show = |name: &str, path: &Option<std::path::PathBuf>| match path {
+            Some(p) => println!("  {name:<12} found    {}", p.display()),
+            None    => println!("  {name:<12} NOT FOUND"),
+        };
+        println!("Binaries:");
+        show("ffmpeg",    &bins.ffmpeg);
+        show("ffprobe",   &bins.ffprobe);
+        show("atracdenc", &bins.atracdenc);
+        println!("\nEncoder adapters:");
+        for (name, adapter) in &caps.adapters {
+            println!("  {name}: available ({})", adapter.supported_output_codecs().join(", "));
+        }
+        for name in ["ffmpeg", "atrac"] {
+            if !caps.adapters.contains_key(name) {
+                println!("  {name}: not available");
+            }
+        }
     }
 
     Ok(())

@@ -26,6 +26,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::{MetadataOptions, StandardTagKey, Value};
 use symphonia::core::probe::Hint;
 
+use crate::binaries;
 use crate::profiles::DeviceProfile;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -260,10 +261,10 @@ pub fn probe_video_file(path: &Path) -> Result<VideoInfo> {
         return Err(anyhow!("file not found: {}", path.display()));
     }
 
-    let ffprobe = which::which("ffprobe").map_err(|_| {
+    let ffprobe = binaries::find_ffprobe().ok_or_else(|| {
         anyhow!(
-            "ffprobe not found in PATH — install FFmpeg to probe video files \
-             (https://ffmpeg.org)"
+            "ffprobe not found — install FFmpeg (https://ffmpeg.org) or set \
+             BBT_FFPROBE_PATH to the binary location"
         )
     })?;
 
