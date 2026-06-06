@@ -7,6 +7,7 @@
 //! Every execution produces a manifest. The manifest is the ground truth
 //! record of what was produced: paths, hashes, sizes, timestamps.
 //! `bbt verify <manifest.json>` re-checks all artifacts at any future point.
+//! `bbt resume <manifest.json>` re-encodes anything that failed or drifted.
 
 use std::path::{Path, PathBuf};
 
@@ -28,6 +29,10 @@ pub struct TranscodeManifest {
     pub total_elapsed_ms: u64,
     pub success_count: usize,
     pub failure_count: usize,
+    pub carried_forward_count: usize,
+    /// manifest_id of the manifest this run resumed from, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resumed_from: Option<Uuid>,
     pub graph: ExecutionGraph,
     pub artifacts: Vec<ArtifactRecord>,
 }
@@ -48,9 +53,23 @@ pub struct ArtifactRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ArtifactStatus {
+    /// Freshly encoded this run.
     Success,
+    /// Verified intact from a previous run; not re-encoded.
+    CarriedForward {
+        from_manifest_id: Uuid,
+    },
+    /// Encode failed.
     Failed { error: String },
+    /// Intentionally skipped (e.g. already in target format).
     Skipped { reason: String },
+}
+
+impl ArtifactStatus {
+    /// Whether this artifact is available and usable.
+    pub fn is_good(&self) -> bool {
+        matches!(self, Self::Success | Self::CarriedForward { .. })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +87,7 @@ pub enum VerificationStatus {
     HashMismatch { expected: String, actual: String },
     SizeMismatch { expected: u64, actual: u64 },
     OriginallyFailed { error: String },
+    CarriedForward,
 }
 
 impl TranscodeManifest {
@@ -85,6 +105,31 @@ impl TranscodeManifest {
             total_elapsed_ms,
             success_count,
             failure_count,
+            carried_forward_count: 0,
+            resumed_from: None,
+            graph,
+            artifacts,
+        }
+    }
+
+    pub fn new_resumed(
+        graph: ExecutionGraph,
+        artifacts: Vec<ArtifactRecord>,
+        total_elapsed_ms: u64,
+        success_count: usize,
+        failure_count: usize,
+        carried_forward_count: usize,
+        resumed_from: Uuid,
+    ) -> Self {
+        Self {
+            schema_version: MANIFEST_SCHEMA_VERSION.to_string(),
+            manifest_id: Uuid::new_v4(),
+            completed_at: Utc::now(),
+            total_elapsed_ms,
+            success_count,
+            failure_count,
+            carried_forward_count,
+            resumed_from: Some(resumed_from),
             graph,
             artifacts,
         }
@@ -110,31 +155,55 @@ impl TranscodeManifest {
 
     /// Re-verify all artifacts against their recorded hashes.
     pub fn verify(&self) -> Vec<VerificationResult> {
-        let mut results = Vec::new();
-
-        for record in &self.artifacts {
-            let status = match &record.status {
-                ArtifactStatus::Failed { error } => VerificationStatus::OriginallyFailed {
-                    error: error.clone(),
-                },
-                ArtifactStatus::Skipped { reason } => VerificationStatus::OriginallyFailed {
-                    error: format!("skipped: {reason}"),
-                },
-                ArtifactStatus::Success => verify_artifact(record),
-            };
-
-            results.push(VerificationResult {
-                node_id: record.node_id,
-                output_path: record.output_path.clone(),
-                status,
-            });
-        }
-
-        results
+        self.artifacts
+            .iter()
+            .map(|record| {
+                let status = match &record.status {
+                    ArtifactStatus::Failed { error } => {
+                        VerificationStatus::OriginallyFailed { error: error.clone() }
+                    }
+                    ArtifactStatus::Skipped { .. } => {
+                        VerificationStatus::OriginallyFailed {
+                            error: "skipped".to_string(),
+                        }
+                    }
+                    ArtifactStatus::CarriedForward { .. } => {
+                        // Re-verify the file is still intact
+                        match check_artifact_integrity(record) {
+                            true => VerificationStatus::CarriedForward,
+                            false => VerificationStatus::Missing,
+                        }
+                    }
+                    ArtifactStatus::Success => check_artifact(record),
+                };
+                VerificationResult {
+                    node_id: record.node_id,
+                    output_path: record.output_path.clone(),
+                    status,
+                }
+            })
+            .collect()
     }
 }
 
-fn verify_artifact(record: &ArtifactRecord) -> VerificationStatus {
+/// Check whether a previously successful artifact is still valid on disk.
+/// Returns true only if the file exists AND the SHA-256 still matches.
+/// Any doubt → false → re-encode.
+pub fn artifact_still_valid(record: &ArtifactRecord) -> bool {
+    check_artifact_integrity(record)
+}
+
+fn check_artifact_integrity(record: &ArtifactRecord) -> bool {
+    if !record.output_path.exists() {
+        return false;
+    }
+    match compute_sha256(&record.output_path) {
+        Ok(hash) => hash == record.sha256,
+        Err(_) => false,
+    }
+}
+
+fn check_artifact(record: &ArtifactRecord) -> VerificationStatus {
     if !record.output_path.exists() {
         return VerificationStatus::Missing;
     }
@@ -151,19 +220,14 @@ fn verify_artifact(record: &ArtifactRecord) -> VerificationStatus {
         };
     }
 
-    let actual_hash = match compute_sha256(&record.output_path) {
-        Ok(h) => h,
-        Err(_) => return VerificationStatus::Missing,
-    };
-
-    if actual_hash != record.sha256 {
-        return VerificationStatus::HashMismatch {
+    match compute_sha256(&record.output_path) {
+        Ok(hash) if hash == record.sha256 => VerificationStatus::Ok,
+        Ok(hash) => VerificationStatus::HashMismatch {
             expected: record.sha256.clone(),
-            actual: actual_hash,
-        };
+            actual: hash,
+        },
+        Err(_) => VerificationStatus::Missing,
     }
-
-    VerificationStatus::Ok
 }
 
 fn compute_sha256(path: &Path) -> Result<String> {

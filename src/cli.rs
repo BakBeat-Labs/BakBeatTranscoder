@@ -45,6 +45,9 @@ pub enum Commands {
     /// Verify artifacts against a manifest.json.
     Verify(VerifyArgs),
 
+    /// Resume a previous run: re-encode failed or missing artifacts, carry forward intact ones.
+    Resume(ResumeArgs),
+
     /// Probe an audio file and show its format, codec, and metadata.
     Probe(ProbeArgs),
 
@@ -177,6 +180,19 @@ pub struct ExecuteArgs {
 pub struct VerifyArgs {
     /// Path to a manifest.json to verify
     pub manifest: PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct ResumeArgs {
+    /// Manifest from a previous run. The graph is loaded from inside it.
+    pub manifest: PathBuf,
+
+    /// Where to save the new manifest (default: <original dir>/manifest-resumed.json)
+    #[arg(long)]
+    pub output_manifest: Option<PathBuf>,
+
+    #[arg(long)]
+    pub stop_on_error: bool,
 }
 
 #[derive(Args, Debug)]

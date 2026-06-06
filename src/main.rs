@@ -53,6 +53,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Plan(args) => cmd_plan(args, cli.json),
         Commands::Execute(args) => cmd_execute(args, cli.json),
         Commands::Verify(args) => cmd_verify(args, cli.json),
+        Commands::Resume(args) => cmd_resume(args, cli.json),
         Commands::Probe(args) => cmd_probe(args, cli.json),
         Commands::Profiles(args) => cmd_profiles(args, cli.json),
         Commands::Check => cmd_check(cli.json),
@@ -78,7 +79,7 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
     let mut emitter = Emitter::new(json);
 
     // Phase 1: Probe + Plan
-    emitter.emit(Event::PhaseStart { phase: Phase::Probe, total: Some(inputs.len()) });
+    emitter.emit(Event::PhaseStart { phase: Phase::Probe, total: Some(inputs.len()), carrying_forward: None });
 
     let mut plan = planner::build_plan(
         &inputs, &profile, &args.output, source_root,
@@ -103,7 +104,7 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
         failed: None,
     });
 
-    emitter.emit(Event::PhaseStart { phase: Phase::Plan, total: None });
+    emitter.emit(Event::PhaseStart { phase: Phase::Plan, total: None, carrying_forward: None });
     emitter.emit(Event::PhaseComplete {
         phase: Phase::Plan,
         total: None,
@@ -119,12 +120,14 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
             failed: 0,
             total_elapsed_ms: 0,
             manifest: String::new(),
+            carried_forward: None,
+            re_encoded: None,
         });
         return Ok(());
     }
 
     // Phase 2: Resolve capabilities
-    emitter.emit(Event::PhaseStart { phase: Phase::Resolve, total: None });
+    emitter.emit(Event::PhaseStart { phase: Phase::Resolve, total: None, carrying_forward: None });
     let caps = resolver::ResolvedCapabilities::detect();
     if let Err(e) = caps.validate_plan(&plan.jobs) {
         emitter.emit(Event::OperationFailed {
@@ -158,6 +161,8 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
         failed: manifest.failure_count,
         total_elapsed_ms: manifest.total_elapsed_ms,
         manifest: manifest_path.to_string_lossy().into_owned(),
+        carried_forward: None,
+        re_encoded: None,
     });
 
     // In JSON mode, also emit the full manifest as the final object
@@ -185,7 +190,7 @@ fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
     let source_root = args.source_root.as_deref().or_else(|| common_prefix(&inputs));
     let mut emitter = Emitter::new(json);
 
-    emitter.emit(Event::PhaseStart { phase: Phase::Probe, total: Some(inputs.len()) });
+    emitter.emit(Event::PhaseStart { phase: Phase::Probe, total: Some(inputs.len()), carrying_forward: None });
 
     let mut plan = planner::build_plan(
         &inputs, &profile, &args.output, source_root,
@@ -210,7 +215,7 @@ fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
         failed: None,
     });
 
-    emitter.emit(Event::PhaseStart { phase: Phase::Resolve, total: None });
+    emitter.emit(Event::PhaseStart { phase: Phase::Resolve, total: None, carrying_forward: None });
     let caps = resolver::ResolvedCapabilities::detect();
     caps.validate_plan(&plan.jobs)?;
     caps.assign_adapters(&mut plan.jobs);
@@ -286,6 +291,8 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
         failed: manifest.failure_count,
         total_elapsed_ms: manifest.total_elapsed_ms,
         manifest: args.manifest.to_string_lossy().into_owned(),
+        carried_forward: None,
+        re_encoded: None,
     });
 
     if json {
@@ -343,12 +350,94 @@ fn cmd_verify(args: cli::VerifyArgs, json: bool) -> Result<()> {
                         r.output_path.display()
                     );
                 }
+                verifier::VerificationStatus::CarriedForward => {
+                    println!("  carried  {}", r.output_path.display());
+                }
             }
         }
         println!("\n{ok_count} ok, {fail_count} failed");
     }
 
     if fail_count > 0 {
+        process::exit(2);
+    }
+
+    Ok(())
+}
+
+// ── resume ────────────────────────────────────────────────────────────────────
+
+fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
+    use progress::{Emitter, Event, Phase};
+
+    let prior = verifier::TranscodeManifest::load_from_file(&args.manifest)?;
+
+    if !prior.graph.verify_hash() {
+        eprintln!("warning: graph hash mismatch in manifest — graph may have been modified");
+    }
+
+    let caps = resolver::ResolvedCapabilities::detect();
+
+    // Build dummy jobs for capability validation using the graph nodes
+    let dummy_jobs: Vec<planner::PlannedJob> = prior.graph.nodes.iter().map(|n| {
+        use probe::AudioInfo;
+        use std::collections::BTreeMap;
+        planner::PlannedJob {
+            source_path: n.input_path.clone(),
+            source_info: AudioInfo {
+                path: n.input_path.clone(),
+                container: String::new(),
+                codec: String::new(),
+                sample_rate_hz: None,
+                channels: None,
+                bits_per_sample: None,
+                duration_secs: None,
+                bitrate_kbps: None,
+                tags: BTreeMap::new(),
+            },
+            output_path: n.output_path.clone(),
+            params: n.params.clone(),
+            assigned_adapter: Some(n.adapter.clone()),
+        }
+    }).collect();
+
+    let mut emitter = Emitter::new(json);
+
+    if let Err(e) = caps.validate_plan(&dummy_jobs) {
+        emitter.emit(Event::OperationFailed {
+            phase: Some(Phase::Resolve),
+            error: e.to_string(),
+        });
+        return Err(e);
+    }
+
+    let manifest = executor::resume_graph(&prior, &caps, &mut emitter, args.stop_on_error)?;
+
+    let out_path = args.output_manifest.unwrap_or_else(|| {
+        let stem = args.manifest
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        args.manifest
+            .with_file_name(format!("{stem}-resumed.json"))
+    });
+
+    manifest.save_to_file(&out_path)?;
+
+    emitter.emit(Event::Complete {
+        success: manifest.success_count,
+        failed: manifest.failure_count,
+        total_elapsed_ms: manifest.total_elapsed_ms,
+        manifest: out_path.to_string_lossy().into_owned(),
+        carried_forward: Some(manifest.carried_forward_count),
+        re_encoded: Some(manifest.success_count),
+    });
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&manifest)?);
+    }
+
+    if manifest.failure_count > 0 {
         process::exit(2);
     }
 

@@ -43,6 +43,9 @@ pub enum Event {
         /// Total item count, if known before the phase runs.
         #[serde(skip_serializing_if = "Option::is_none")]
         total: Option<usize>,
+        /// For resume runs: nodes verified intact from the previous manifest.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        carrying_forward: Option<usize>,
     },
 
     /// A file was successfully processed within a phase.
@@ -109,6 +112,12 @@ pub enum Event {
         failed: usize,
         total_elapsed_ms: u64,
         manifest: String,
+        /// Nodes verified from a previous run and not re-encoded (resume only).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        carried_forward: Option<usize>,
+        /// Nodes actually encoded this run (resume only).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        re_encoded: Option<usize>,
     },
 }
 
@@ -141,7 +150,7 @@ impl Emitter {
 
     fn render_human(&mut self, event: Event) {
         match event {
-            Event::PhaseStart { phase, total } => {
+            Event::PhaseStart { phase, total, carrying_forward } => {
                 if let Some(bar) = self.bar.take() {
                     bar.finish_and_clear();
                 }
@@ -161,6 +170,9 @@ impl Emitter {
                     Phase::Resolve => eprint!("  Checking capabilities..."),
                     Phase::Encode => {
                         let n = total.unwrap_or(0) as u64;
+                        if let Some(cf) = carrying_forward.filter(|&c| c > 0) {
+                            eprintln!("  resuming: {cf} already verified, {} to encode", n);
+                        }
                         let bar = ProgressBar::new(n);
                         bar.set_style(
                             ProgressStyle::with_template(
@@ -238,13 +250,19 @@ impl Emitter {
                 eprintln!("\n  operation failed{where_}: {error}");
             }
 
-            Event::Complete { success, failed, total_elapsed_ms, manifest } => {
+            Event::Complete { success, failed, total_elapsed_ms, manifest, carried_forward, re_encoded } => {
                 if let Some(bar) = self.bar.take() {
                     bar.finish_and_clear();
                 }
                 let secs = total_elapsed_ms as f64 / 1000.0;
+                let resume_note = match (carried_forward, re_encoded) {
+                    (Some(cf), Some(re)) if cf > 0 => {
+                        format!("  ({re} newly encoded, {cf} carried forward)\n")
+                    }
+                    _ => String::new(),
+                };
                 println!(
-                    "\n{success} succeeded, {failed} failed  ({secs:.1}s)\nmanifest: {manifest}"
+                    "\n{success} succeeded, {failed} failed  ({secs:.1}s)\n{resume_note}manifest: {manifest}"
                 );
             }
         }
