@@ -203,13 +203,15 @@ fn build_atracdenc_args(
             args.extend(["-e".into(), "atrac1".into()]);
         }
         "atrac3" => {
-            // MD LP2 (132 kbps default) or LP4 (66 kbps)
+            // MD LP2 (132 kbps default) or LP4 (66 kbps Sony nominal).
+            // atracdenc LP4 token is 64 (reports ~66150 bps effective).
+            // Passing 66 selects a wrong ~94 kbps mode — always use 64 for LP4.
+            // 132 kbps is atracdenc's default for atrac3; no flag needed for LP2.
             args.extend(["-e".into(), "atrac3".into()]);
             if let Some(kbps) = bitrate_kbps {
                 if kbps <= 66 {
-                    args.extend(["--bitrate".into(), "66".into()]);
+                    args.extend(["--bitrate".into(), "64".into()]);
                 }
-                // 132 kbps is atracdenc's default for atrac3; no flag needed
             }
         }
         other => return Err(AdapterError::UnsupportedCodec(other.to_string())),
@@ -221,6 +223,62 @@ fn build_atracdenc_args(
     ]);
 
     Ok(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn atracdenc_args(codec: &str, bitrate_kbps: Option<u32>) -> Vec<String> {
+        build_atracdenc_args(
+            std::path::Path::new("/tmp/in.wav"),
+            std::path::Path::new("/tmp/out.oma"),
+            codec,
+            bitrate_kbps,
+        )
+        .expect("should build args")
+    }
+
+    fn bitrate_arg(args: &[String]) -> Option<&str> {
+        args.windows(2)
+            .find(|w| w[0] == "--bitrate")
+            .map(|w| w[1].as_str())
+    }
+
+    #[test]
+    fn lp4_nominal_66_uses_token_64() {
+        // Profile exposes Sony nominal 66 kbps; atracdenc LP4 token is 64.
+        // Passing 66 triggers a wrong ~94 kbps mode — must be 64.
+        let args = atracdenc_args("atrac3", Some(66));
+        assert_eq!(bitrate_arg(&args), Some("64"), "LP4 must use --bitrate 64");
+    }
+
+    #[test]
+    fn lp4_explicit_64_uses_token_64() {
+        let args = atracdenc_args("atrac3", Some(64));
+        assert_eq!(bitrate_arg(&args), Some("64"));
+    }
+
+    #[test]
+    fn lp2_132_passes_no_bitrate_flag() {
+        // 132 kbps is atracdenc's default for atrac3; no --bitrate needed.
+        let args = atracdenc_args("atrac3", Some(132));
+        assert_eq!(bitrate_arg(&args), None, "LP2 must not pass --bitrate");
+    }
+
+    #[test]
+    fn lp2_no_bitrate_hint_passes_no_bitrate_flag() {
+        let args = atracdenc_args("atrac3", None);
+        assert_eq!(bitrate_arg(&args), None);
+    }
+
+    #[test]
+    fn sp_atrac1_passes_no_bitrate_flag() {
+        let args = atracdenc_args("atrac1", None);
+        assert_eq!(bitrate_arg(&args), None);
+        assert!(args.contains(&"-e".to_string()));
+        assert!(args.contains(&"atrac1".to_string()));
+    }
 }
 
 /// Build args for the Sony atracenc binary (fallback, closed source).
