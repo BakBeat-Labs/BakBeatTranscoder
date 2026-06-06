@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::error::BbtError;
+use crate::graph::MediaType;
 
 /// A device profile: what format, codec, and constraints a target device requires.
 /// `None` values mean "preserve from source" — the planner resolves them.
@@ -23,19 +24,47 @@ pub struct DeviceProfile {
     pub vendor: Option<String>,
     pub description: String,
 
-    /// Target container (e.g. "mp3", "m4a", "ogg", "oma", "wav")
+    /// Whether this profile targets audio-only or video content.
+    #[serde(default)]
+    pub media_type: MediaType,
+
+    /// Target container (e.g. "mp3", "m4a", "ogg", "oma", "wav", "mp4")
     pub container: String,
-    /// Target codec (e.g. "mp3", "aac", "flac", "vorbis", "atrac1", "atrac3")
-    pub codec: String,
-    /// Target bitrate in kbps. Required for lossy codecs.
-    pub bitrate_kbps: Option<u32>,
+
+    // ── Audio track ───────────────────────────────────────────────────────────
+    /// Audio codec (e.g. "mp3", "aac", "flac", "vorbis", "atrac1", "atrac3")
+    pub audio_codec: String,
+    /// Audio bitrate in kbps. Required for lossy codecs.
+    pub audio_bitrate_kbps: Option<u32>,
     /// Target sample rate in Hz. None = preserve source.
     pub sample_rate_hz: Option<u32>,
     /// Target channel count. None = preserve source.
     pub channels: Option<u8>,
+
+    // ── Video stream ──────────────────────────────────────────────────────────
+    // All None for audio-only profiles.
+    /// Video codec (e.g. "h264", "mpeg4", "hevc")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_codec: Option<String>,
+    /// Video bitrate in kbps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_bitrate_kbps: Option<u32>,
+    /// Output width in pixels. None = preserve source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Output height in pixels. None = preserve source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// Output frame rate. None = preserve source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_rate: Option<f32>,
+    /// FFmpeg pixel format (e.g. "yuv420p"). None = let FFmpeg decide.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixel_format: Option<String>,
+
     /// Whether to force CBR encoding. Should be true for deterministic output.
     pub cbr: bool,
-    /// File extension for output files (e.g. "mp3", "m4a", "oma")
+    /// File extension for output files (e.g. "mp3", "m4a", "oma", "mp4")
     pub extension: String,
     /// Human-readable notes about this profile
     pub notes: Option<String>,

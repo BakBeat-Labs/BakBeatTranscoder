@@ -2,7 +2,7 @@ id          = "generic-flac"
 name        = "Generic FLAC — Lossless"
 description = "FLAC lossless compression. Preserves all audio data exactly."
 container   = "flac"
-codec       = "flac"
+audio_codec       = "flac"
 # No bitrate — lossless
 # sample_rate_hz unset — preserve source rate
 # channels unset — preserve source channels

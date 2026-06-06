@@ -15,7 +15,18 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const GRAPH_SCHEMA_VERSION: &str = "1.0";
+/// Schema 1.1 — renamed codec→audio_codec, bitrate_kbps→audio_bitrate_kbps;
+/// added MediaType, video stream fields to EncodeParams.
+pub const GRAPH_SCHEMA_VERSION: &str = "1.1";
+
+/// Whether a node encodes audio-only or a video file (with embedded audio track).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaType {
+    #[default]
+    Audio,
+    Video,
+}
 
 /// A fully resolved, serializable transcoding plan ready for execution.
 /// Saved as JSON — canonical ordering matters for stable hashing.
@@ -47,18 +58,44 @@ pub struct ExecutionNode {
     pub params: EncodeParams,
 }
 
-/// Fully resolved encoding parameters. No Option values — the planner
-/// fills in all defaults from the source file before building the graph.
+/// Fully resolved encoding parameters. All audio fields are always present.
+/// Video fields are None for audio-only nodes.
+/// BTreeMap fields use stable ordering for deterministic hashing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncodeParams {
-    pub codec: String,
+    #[serde(default)]
+    pub media_type: MediaType,
+
     pub container: String,
     pub extension: String,
-    pub bitrate_kbps: Option<u32>,
+    pub cbr: bool,
+
+    // ── Audio track ───────────────────────────────────────────────────────────
+    // For audio-only: the primary codec.
+    // For video: the codec used for the embedded audio track.
+    pub audio_codec: String,
+    pub audio_bitrate_kbps: Option<u32>,
     pub sample_rate_hz: u32,
     pub channels: u8,
-    pub cbr: bool,
-    /// Adapter-specific extra parameters. BTreeMap for canonical serialization ordering.
+
+    // ── Video stream ──────────────────────────────────────────────────────────
+    // All None for audio-only nodes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_codec: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_bitrate_kbps: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// Frames per second. None = preserve source frame rate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_rate: Option<f32>,
+    /// FFmpeg pixel format string (e.g. "yuv420p"). None = let FFmpeg decide.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixel_format: Option<String>,
+
+    // ── Adapter-specific overrides ────────────────────────────────────────────
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, String>,
 }
@@ -103,8 +140,6 @@ impl ExecutionGraph {
 
 fn compute_graph_hash(nodes: &[ExecutionNode]) -> String {
     use sha2::{Digest, Sha256};
-    // Serialize nodes canonically (BTreeMap fields ensure stable ordering)
     let canonical = serde_json::to_string(nodes).expect("nodes always serialize");
-    let hash = Sha256::digest(canonical.as_bytes());
-    hex::encode(hash)
+    hex::encode(Sha256::digest(canonical.as_bytes()))
 }

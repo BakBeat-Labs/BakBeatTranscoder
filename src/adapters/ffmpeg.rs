@@ -18,52 +18,63 @@ use tracing::{debug, trace};
 
 use crate::adapters::{ensure_parent, sha256_file, ArtifactInfo, EncoderAdapter};
 use crate::error::AdapterError;
-use crate::graph::ExecutionNode;
+use crate::graph::{ExecutionNode, MediaType};
 
 pub struct FfmpegAdapter {
     binary: PathBuf,
 }
 
 impl FfmpegAdapter {
-    /// Locate ffmpeg in PATH and return an adapter, or None if not found.
     pub fn detect() -> Option<Self> {
         which::which("ffmpeg").ok().map(|p| Self { binary: p })
     }
 
-    /// Build the ffmpeg argument list for the given node.
     fn build_args(&self, node: &ExecutionNode) -> Result<Vec<String>, AdapterError> {
         let p = &node.params;
         let mut args: Vec<String> = Vec::new();
 
-        // Overwrite output without prompt
         args.push("-y".into());
-
-        // Input
         args.extend(["-i".into(), node.input_path.to_string_lossy().into_owned()]);
 
-        // No video streams (audio-only output)
-        args.push("-vn".into());
+        // Strip video streams for audio-only output; preserve them for video encodes
+        if p.media_type == MediaType::Audio {
+            args.push("-vn".into());
+        }
 
-        // Preserve all metadata from input
         args.extend(["-map_metadata".into(), "0".into()]);
 
-        // Codec
-        let ffmpeg_codec = codec_to_ffmpeg_name(&p.codec)?;
-        args.extend(["-codec:a".into(), ffmpeg_codec.into()]);
+        // ── Video stream args (video encodes only) ────────────────────────────
+        if p.media_type == MediaType::Video {
+            if let Some(vcodec) = &p.video_codec {
+                args.extend(["-codec:v".into(), audio_codec_to_ffmpeg(vcodec)?.into()]);
+            }
+            if let Some(vbr) = p.video_bitrate_kbps {
+                args.extend(["-b:v".into(), format!("{vbr}k")]);
+            }
+            if let (Some(w), Some(h)) = (p.width, p.height) {
+                args.extend(["-vf".into(), format!("scale={w}:{h}")]);
+            }
+            if let Some(fps) = p.frame_rate {
+                args.extend(["-r".into(), fps.to_string()]);
+            }
+            if let Some(pf) = &p.pixel_format {
+                args.extend(["-pix_fmt".into(), pf.clone()]);
+            }
+        }
 
-        // Bitrate (for lossy codecs)
-        if let Some(kbps) = p.bitrate_kbps {
+        // ── Audio track args ──────────────────────────────────────────────────
+        let ffmpeg_acodec = audio_codec_to_ffmpeg(&p.audio_codec)?;
+        args.extend(["-codec:a".into(), ffmpeg_acodec.into()]);
+
+        if let Some(kbps) = p.audio_bitrate_kbps {
             args.extend(["-b:a".into(), format!("{kbps}k")]);
 
-            // CBR enforcement per codec
             if p.cbr {
-                match p.codec.as_str() {
+                match p.audio_codec.as_str() {
                     "mp3" => {
-                        // libmp3lame: disable bit reservoir for strict CBR
                         args.extend(["-reservoir".into(), "0".into()]);
                     }
                     "vorbis" => {
-                        // libvorbis: clamp min/max to force CBR
                         args.extend([
                             "-minrate".into(), format!("{kbps}k"),
                             "-maxrate".into(), format!("{kbps}k"),
@@ -77,13 +88,9 @@ impl FfmpegAdapter {
             }
         }
 
-        // Sample rate
         args.extend(["-ar".into(), p.sample_rate_hz.to_string()]);
-
-        // Channels
         args.extend(["-ac".into(), p.channels.to_string()]);
 
-        // Codec-specific extra args from params
         for (k, v) in &p.extra {
             args.push(format!("-{k}"));
             if !v.is_empty() {
@@ -91,7 +98,6 @@ impl FfmpegAdapter {
             }
         }
 
-        // Output path
         args.push(node.output_path.to_string_lossy().into_owned());
 
         Ok(args)
@@ -105,9 +111,11 @@ impl EncoderAdapter for FfmpegAdapter {
 
     fn supported_output_codecs(&self) -> &[&str] {
         &[
+            // Audio
             "mp3", "aac", "flac", "vorbis", "opus",
-            "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le",
-            "pcm_f32le", "wav",
+            "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "wav",
+            // Video
+            "h264", "avc", "h265", "hevc", "mpeg4", "mpeg2", "vp8", "vp9", "av1",
         ]
     }
 
@@ -123,9 +131,8 @@ impl EncoderAdapter for FfmpegAdapter {
 
         let output = Command::new(&self.binary)
             .args(&args)
-            // ffmpeg writes progress/info to stderr; capture it for error reporting
             .output()
-            .map_err(|e| AdapterError::Io(e))?;
+            .map_err(AdapterError::Io)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -143,14 +150,16 @@ impl EncoderAdapter for FfmpegAdapter {
             output_path: node.output_path.clone(),
             sha256,
             size_bytes,
-            duration_ms: None, // verifier will probe if needed
+            duration_ms: None,
         })
     }
 }
 
-/// Map our codec strings to FFmpeg's -codec:a argument values.
-fn codec_to_ffmpeg_name(codec: &str) -> Result<&'static str, AdapterError> {
+/// Maps our codec strings to FFmpeg codec names.
+/// Used for both audio codec:a and video codec:v arguments.
+fn audio_codec_to_ffmpeg(codec: &str) -> Result<&'static str, AdapterError> {
     match codec {
+        // Audio
         "mp3"       => Ok("libmp3lame"),
         "aac"       => Ok("aac"),
         "flac"      => Ok("flac"),
@@ -162,7 +171,15 @@ fn codec_to_ffmpeg_name(codec: &str) -> Result<&'static str, AdapterError> {
         "pcm_s24le" => Ok("pcm_s24le"),
         "pcm_s32le" => Ok("pcm_s32le"),
         "pcm_f32le" => Ok("pcm_f32le"),
-        "wav"       => Ok("pcm_s16le"), // WAV container, 16-bit PCM default
+        "wav"       => Ok("pcm_s16le"),
+        // Video
+        "h264" | "avc"   => Ok("libx264"),
+        "h265" | "hevc"  => Ok("libx265"),
+        "mpeg4"          => Ok("mpeg4"),
+        "mpeg2"          => Ok("mpeg2video"),
+        "vp8"            => Ok("libvpx"),
+        "vp9"            => Ok("libvpx-vp9"),
+        "av1"            => Ok("libaom-av1"),
         other => Err(AdapterError::UnsupportedCodec(other.to_string())),
     }
 }

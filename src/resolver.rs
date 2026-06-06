@@ -68,10 +68,10 @@ impl ResolvedCapabilities {
 
         // Check that at least ffmpeg is present for any non-ATRAC job
         let needs_ffmpeg = jobs.iter().any(|j| {
-            !matches!(j.params.codec.as_str(), "atrac1" | "atrac3" | "atrac3p")
+            !matches!(j.params.audio_codec.as_str(), "atrac1" | "atrac3" | "atrac3p")
         });
         let needs_atrac = jobs.iter().any(|j| {
-            matches!(j.params.codec.as_str(), "atrac1" | "atrac3" | "atrac3p")
+            matches!(j.params.audio_codec.as_str(), "atrac1" | "atrac3" | "atrac3p")
         });
 
         if needs_ffmpeg && !self.has_adapter("ffmpeg") {
@@ -93,10 +93,10 @@ impl ResolvedCapabilities {
 
         // Check each job individually for unresolvable codec
         for job in jobs {
-            if self.adapter_for_codec(&job.params.codec).is_none() {
+            if self.adapter_for_codec(&job.params.audio_codec).is_none() {
                 errors.push(format!(
                     "no adapter can encode to codec '{}' (file: {})",
-                    job.params.codec,
+                    job.params.audio_codec,
                     job.source_path.display()
                 ));
             }
@@ -113,7 +113,7 @@ impl ResolvedCapabilities {
     pub fn assign_adapters(&self, jobs: &mut Vec<PlannedJob>) {
         for job in jobs {
             job.assigned_adapter = self
-                .adapter_for_codec(&job.params.codec)
+                .adapter_for_codec(&job.params.audio_codec)
                 .map(str::to_string);
         }
     }

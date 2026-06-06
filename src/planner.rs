@@ -61,7 +61,7 @@ pub fn build_plan(
         on_probed(idx + 1, total, input_path, elapsed_ms);
 
         // If already in the target format, skip (deterministic no-op detection)
-        if source_info.matches_codec(&profile.codec, &profile.container) {
+        if source_info.matches_codec(&profile.audio_codec, &profile.container) {
             tracing::debug!(path = ?input_path, "skipping: already in target format");
             skipped_count += 1;
             continue;
@@ -150,13 +150,20 @@ fn resolve_params(source: &AudioInfo, profile: &DeviceProfile) -> EncodeParams {
         .unwrap_or(2); // safe fallback to stereo
 
     EncodeParams {
-        codec: profile.codec.clone(),
+        media_type: profile.media_type.clone(),
         container: profile.container.clone(),
         extension: profile.extension.clone(),
-        bitrate_kbps: profile.bitrate_kbps,
+        cbr: profile.cbr,
+        audio_codec: profile.audio_codec.clone(),
+        audio_bitrate_kbps: profile.audio_bitrate_kbps,
         sample_rate_hz,
         channels,
-        cbr: profile.cbr,
+        video_codec: profile.video_codec.clone(),
+        video_bitrate_kbps: profile.video_bitrate_kbps,
+        width: profile.width,
+        height: profile.height,
+        frame_rate: profile.frame_rate,
+        pixel_format: profile.pixel_format.clone(),
         extra: BTreeMap::new(),
     }
 }

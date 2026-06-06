@@ -22,6 +22,7 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use cli::{Cli, Commands};
+use graph::MediaType;
 
 fn main() {
     let cli = Cli::parse();
@@ -260,7 +261,6 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
     let dummy_jobs: Vec<planner::PlannedJob> = graph.nodes.iter().map(|n| {
         use planner::PlannedJob;
         use probe::AudioInfo;
-        use std::collections::BTreeMap;
         PlannedJob {
             source_path: n.input_path.clone(),
             source_info: AudioInfo {
@@ -272,7 +272,7 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
                 bits_per_sample: None,
                 duration_secs: None,
                 bitrate_kbps: None,
-                tags: BTreeMap::new(),
+                tags: std::collections::BTreeMap::new(),
             },
             output_path: n.output_path.clone(),
             params: n.params.clone(),
@@ -381,7 +381,6 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
     // Build dummy jobs for capability validation using the graph nodes
     let dummy_jobs: Vec<planner::PlannedJob> = prior.graph.nodes.iter().map(|n| {
         use probe::AudioInfo;
-        use std::collections::BTreeMap;
         planner::PlannedJob {
             source_path: n.input_path.clone(),
             source_info: AudioInfo {
@@ -393,7 +392,7 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
                 bits_per_sample: None,
                 duration_secs: None,
                 bitrate_kbps: None,
-                tags: BTreeMap::new(),
+                tags: std::collections::BTreeMap::new(),
             },
             output_path: n.output_path.clone(),
             params: n.params.clone(),
@@ -508,9 +507,13 @@ fn cmd_profiles(args: cli::ProfilesArgs, json: bool) -> Result<()> {
                     println!("── {} ──", p.id);
                     println!("  name:      {}", p.name);
                     if let Some(v) = &p.vendor { println!("  vendor:    {v}"); }
-                    println!("  codec:     {}", p.codec);
+                    println!("  media:     {:?}", p.media_type);
+                    println!("  audio:     {}", p.audio_codec);
+                    if let Some(br) = p.audio_bitrate_kbps { println!("  a-bitrate: {br} kbps"); }
+                    if let Some(vc) = &p.video_codec { println!("  video:     {vc}"); }
+                    if let Some(vbr) = p.video_bitrate_kbps { println!("  v-bitrate: {vbr} kbps"); }
+                    if let (Some(w), Some(h)) = (p.width, p.height) { println!("  res:       {w}x{h}"); }
                     println!("  container: {}", p.container);
-                    if let Some(br) = p.bitrate_kbps { println!("  bitrate:   {br} kbps"); }
                     if let Some(sr) = p.sample_rate_hz { println!("  samplerate:{sr} Hz"); }
                     println!("  cbr:       {}", p.cbr);
                     if let Some(n) = &p.notes { println!("  notes:     {n}"); }
@@ -579,11 +582,18 @@ fn resolve_profile(
         name: format!("Custom ({codec})"),
         vendor: None,
         description: "Manually specified format".to_string(),
+        media_type: MediaType::Audio,
         container: container.to_string(),
-        codec: codec.to_string(),
-        bitrate_kbps: bitrate,
+        audio_codec: codec.to_string(),
+        audio_bitrate_kbps: bitrate,
         sample_rate_hz: sample_rate,
         channels,
+        video_codec: None,
+        video_bitrate_kbps: None,
+        width: None,
+        height: None,
+        frame_rate: None,
+        pixel_format: None,
         cbr,
         extension: extension.to_string(),
         notes: None,

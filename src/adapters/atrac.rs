@@ -166,8 +166,8 @@ impl EncoderAdapter for AtracAdapter {
             tool,
             &wav_path,
             &node.output_path,
-            &node.params.codec,
-            node.params.bitrate_kbps,
+            &node.params.audio_codec,
+            node.params.audio_bitrate_kbps,
         )?;
 
         // tmp_dir drops here, cleaning up the intermediate WAV
