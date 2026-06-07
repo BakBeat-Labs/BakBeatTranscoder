@@ -445,6 +445,7 @@ fn cmd_probe(args: cli::ProbeArgs, json: bool) -> Result<()> {
                 println!("duration:    {:.1}s ({:.0}m{:.0}s)", dur, (dur / 60.0).floor(), dur % 60.0);
             }
             if let Some(br) = a.bitrate_kbps { println!("bitrate:     ~{br} kbps"); }
+            println!("artwork:     {}", if a.has_artwork { "present" } else { "absent" });
             if !a.tags.is_empty() {
                 println!("tags:");
                 for (k, v) in &a.tags { println!("  {k}: {v}"); }

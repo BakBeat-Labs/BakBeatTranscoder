@@ -249,6 +249,7 @@ mod tests {
             duration_secs: None,
             n_frames,
             bitrate_kbps: None,
+            has_artwork: false,
             tags,
         })
     }
@@ -317,6 +318,7 @@ mod tests {
             duration_secs: None,
             n_frames: Some(11408376),
             bitrate_kbps: None,
+            has_artwork: false,
             tags,
         });
         assert!(compute_gapless_trim(&source).is_none());

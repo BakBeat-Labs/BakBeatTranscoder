@@ -37,12 +37,29 @@ impl FfmpegAdapter {
         args.push("-y".into());
         args.extend(["-i".into(), node.input_path.to_string_lossy().into_owned()]);
 
-        // Strip video streams for audio-only output; preserve them for video encodes
+        // Audio-only output: map the audio track plus any embedded cover art
+        // (FLAC PICTURE block, MP4 covr/attached_pic, ID3 APIC all surface to
+        // ffmpeg as a video stream). `0:v?` is optional so files without art
+        // are unaffected. `-c:v copy` carries the image bytes through as-is;
+        // the disposition flag marks it as the front-cover attached picture
+        // in the output container (ID3 APIC for MP3, covr atom for MP4/M4A).
         if p.media_type == MediaType::Audio {
-            args.push("-vn".into());
+            args.extend([
+                "-map".into(), "0:a".into(),
+                "-map".into(), "0:v?".into(),
+                "-c:v".into(), "copy".into(),
+                "-disposition:v:0".into(), "attached_pic".into(),
+            ]);
         }
 
         args.extend(["-map_metadata".into(), "0".into()]);
+
+        // ID3v2.3 is the most broadly compatible tag version for legacy MSC
+        // device players; ffmpeg defaults to 2.4 which some older firmwares
+        // can't read. `bbt probe` (Symphonia) reads either version fine.
+        if p.audio_codec == "mp3" {
+            args.extend(["-id3v2_version".into(), "3".into()]);
+        }
 
         // ── Video stream args (video encodes only) ────────────────────────────
         if p.media_type == MediaType::Video {
@@ -159,6 +176,83 @@ impl EncoderAdapter for FfmpegAdapter {
             size_bytes,
             duration_ms: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use uuid::Uuid;
+    use crate::graph::EncodeParams;
+
+    fn audio_node(audio_codec: &str, container: &str) -> ExecutionNode {
+        ExecutionNode {
+            id: Uuid::new_v4(),
+            sequence: 0,
+            input_path: "/tmp/in.flac".into(),
+            input_sha256: "deadbeef".to_string(),
+            input_size_bytes: 0,
+            output_path: format!("/tmp/out.{container}").into(),
+            adapter: "ffmpeg".to_string(),
+            params: EncodeParams {
+                media_type: MediaType::Audio,
+                container: container.to_string(),
+                extension: container.to_string(),
+                cbr: true,
+                audio_codec: audio_codec.to_string(),
+                audio_bitrate_kbps: Some(128),
+                sample_rate_hz: 44100,
+                channels: 2,
+                video_codec: None,
+                video_bitrate_kbps: None,
+                width: None,
+                height: None,
+                frame_rate: None,
+                pixel_format: None,
+                gapless_trim: None,
+                extra: BTreeMap::new(),
+            },
+        }
+    }
+
+    fn windows_containing<'a>(args: &'a [String], first: &str) -> Option<&'a str> {
+        args.windows(2).find(|w| w[0] == first).map(|w| w[1].as_str())
+    }
+
+    #[test]
+    fn audio_transcode_maps_audio_and_optional_cover_art() {
+        let adapter = FfmpegAdapter { binary: "/usr/bin/ffmpeg".into() };
+        let args = adapter.build_args(&audio_node("mp3", "mp3")).unwrap();
+
+        // Must map the audio track explicitly and the optional embedded-art
+        // video stream — replacing the old blanket `-vn` that dropped cover art.
+        assert!(!args.contains(&"-vn".to_string()), "must not blanket-strip video/art streams");
+        assert_eq!(windows_containing(&args, "-map"), Some("0:a"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v?"));
+        assert_eq!(windows_containing(&args, "-c:v"), Some("copy"));
+        assert_eq!(windows_containing(&args, "-disposition:v:0"), Some("attached_pic"));
+    }
+
+    #[test]
+    fn mp3_target_uses_id3v2_3_for_device_compatibility() {
+        let adapter = FfmpegAdapter { binary: "/usr/bin/ffmpeg".into() };
+        let args = adapter.build_args(&audio_node("mp3", "mp3")).unwrap();
+        assert_eq!(windows_containing(&args, "-id3v2_version"), Some("3"));
+    }
+
+    #[test]
+    fn non_mp3_target_does_not_force_id3v2_version() {
+        let adapter = FfmpegAdapter { binary: "/usr/bin/ffmpeg".into() };
+        let args = adapter.build_args(&audio_node("alac", "m4a")).unwrap();
+        assert_eq!(windows_containing(&args, "-id3v2_version"), None);
+    }
+
+    #[test]
+    fn always_maps_source_metadata() {
+        let adapter = FfmpegAdapter { binary: "/usr/bin/ffmpeg".into() };
+        let args = adapter.build_args(&audio_node("mp3", "mp3")).unwrap();
+        assert_eq!(windows_containing(&args, "-map_metadata"), Some("0"));
     }
 }
 

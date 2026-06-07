@@ -279,6 +279,36 @@ Omitting `width`, `height`, or `frame_rate` preserves the source file's values.
 
 ---
 
+## Metadata and cover art preservation
+
+By default, every transcode carries forward the source's portable tags and
+embedded cover art — no flags required.
+
+- **Tags** — bbt maps all source metadata into the output (`-map_metadata 0`).
+  Standard fields (artist, album, album_artist, title, track, disc, genre,
+  date, composer, comment, ISRC, etc.) and vendor/custom fields all pass
+  through; bbt never invents or rewrites semantic fields from heuristics.
+- **Embedded cover art** — FLAC PICTURE blocks, MP4 `covr`/`attached_pic`,
+  and ID3 APIC images all surface to ffmpeg as a video stream. bbt maps the
+  audio track plus that optional art stream (`-map 0:a -map 0:v?`) and copies
+  the image bytes through unchanged (`-c:v copy`), marking it as the front
+  cover in the output container — `attached_pic=1` / ID3 APIC for MP3,
+  `covr` atom for M4A/ALAC. Files without embedded art are unaffected.
+- **MP3 tag version** — bbt writes ID3v2.3 (`-id3v2_version 3`) for the
+  broadest compatibility with legacy MSC device firmware. `bbt probe` reads
+  both 2.3 and 2.4 correctly either way.
+- **Already-in-target-format skip** — if a source already matches the target
+  codec and container, bbt skips it entirely (the file is left byte-for-byte
+  unchanged), so its tags and artwork are trivially preserved.
+
+`bbt probe` reports whether a source carries embedded art:
+
+```
+artwork:     present
+```
+
+---
+
 ## SP canonical WAV materialization
 
 When decoding AAC/M4A to PCM WAV (`--codec pcm_s16le --container wav`), bbt honors **iTunSMPB** gapless metadata to produce frame counts that match Apple's `afconvert` / CoreAudio — the reference for BakBeat's MiniDisc SP write path.

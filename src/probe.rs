@@ -57,6 +57,10 @@ pub struct AudioInfo {
     pub n_frames: Option<u64>,
     /// Approximate bitrate in kbps estimated from file size and duration
     pub bitrate_kbps: Option<u32>,
+    /// Whether the source carries an embedded picture (cover art, FLAC PICTURE
+    /// block, MP4 covr / attached_pic, ID3 APIC). Used to decide whether the
+    /// transcode graph needs to preserve a video/image stream.
+    pub has_artwork: bool,
     pub tags: BTreeMap<String, String>,
 }
 
@@ -188,15 +192,22 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
         .filter(|&d| d > 0.0)
         .map(|d| ((file_size as f64 * 8.0) / d / 1000.0) as u32);
 
+    let mut has_artwork = false;
     let tags = {
         let from_format: Option<BTreeMap<String, String>> = {
             let meta = probed.format.metadata();
-            meta.current().map(|rev| collect_tags(rev.tags()))
+            if let Some(rev) = meta.current() {
+                has_artwork |= !rev.visuals().is_empty();
+                Some(collect_tags(rev.tags()))
+            } else {
+                None
+            }
         };
         if let Some(t) = from_format.filter(|t| !t.is_empty()) {
             t
         } else if let Some(meta) = probed.metadata.get() {
             if let Some(rev) = meta.current() {
+                has_artwork |= !rev.visuals().is_empty();
                 collect_tags(rev.tags())
             } else {
                 BTreeMap::new()
@@ -222,6 +233,7 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
         duration_secs,
         n_frames,
         bitrate_kbps,
+        has_artwork,
         tags,
     })
 }
