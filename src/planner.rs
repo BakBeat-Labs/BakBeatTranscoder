@@ -38,12 +38,20 @@ pub struct TranscodePlan {
 
 /// Plan a transcoding batch.
 ///
+/// `force` disables the "already in target format" skip check — every input
+/// becomes a job regardless of whether it appears to already match the
+/// profile. Callers that have already decided an encode is required (e.g.
+/// BakBeat re-rating an MP3 to a lower bitrate, where source and target codec
+/// match but bitrate does not) must pass `force = true`; `already_matches_profile`
+/// only compares codec + container and would otherwise wrongly skip the file.
+///
 /// `on_probed` is called after each file: `(current_1_based, total, path, elapsed_ms)`.
 pub fn build_plan(
     inputs: &[PathBuf],
     profile: &DeviceProfile,
     output_dir: &Path,
     source_root: Option<&Path>,
+    force: bool,
     mut on_probed: impl FnMut(usize, usize, &Path, u64),
 ) -> Result<TranscodePlan> {
     let total = inputs.len();
@@ -57,7 +65,7 @@ pub fn build_plan(
 
         on_probed(idx + 1, total, input_path, elapsed_ms);
 
-        if source_info.already_matches_profile(profile) {
+        if !force && source_info.already_matches_profile(profile) {
             tracing::debug!(path = ?input_path, "skipping: already in target format");
             skipped_count += 1;
             continue;

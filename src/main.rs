@@ -85,7 +85,7 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
     emitter.emit(Event::PhaseStart { phase: Phase::Probe, total: Some(inputs.len()), carrying_forward: None });
 
     let mut plan = planner::build_plan(
-        &inputs, &profile, &args.output, source_root,
+        &inputs, &profile, &args.output, source_root, args.no_skip,
         |current, total, path, elapsed_ms| {
             emitter.emit(Event::FileComplete {
                 phase: Phase::Probe,
@@ -118,6 +118,20 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
     });
 
     if plan.jobs.is_empty() {
+        // With --no-skip every input must produce a job; an empty plan here
+        // means the caller's spec was unactionable (e.g. no decodable audio
+        // found), not "nothing to do" — fail loudly instead of exiting 0
+        // with an empty output directory.
+        if args.no_skip {
+            let err = anyhow::anyhow!(
+                "--no-skip was set but no encode jobs were planned for {} input(s) — \
+                 refusing to exit 0 with an empty output directory",
+                inputs.len()
+            );
+            emitter.emit(Event::OperationFailed { phase: Some(Phase::Plan), error: err.to_string() });
+            return Err(err);
+        }
+
         emitter.emit(Event::Complete {
             success: 0,
             failed: 0,
@@ -196,7 +210,7 @@ fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
     emitter.emit(Event::PhaseStart { phase: Phase::Probe, total: Some(inputs.len()), carrying_forward: None });
 
     let mut plan = planner::build_plan(
-        &inputs, &profile, &args.output, source_root,
+        &inputs, &profile, &args.output, source_root, false,
         |current, total, path, elapsed_ms| {
             emitter.emit(Event::FileComplete {
                 phase: Phase::Probe,

@@ -118,6 +118,15 @@ pub struct TranscodeArgs {
     /// Abort the entire batch on the first encode error
     #[arg(long)]
     pub stop_on_error: bool,
+
+    /// Disable the "already in target format" skip check: always encode every
+    /// input to the requested spec, or fail. Use this when you (the caller)
+    /// have already decided an encode is required — e.g. re-rating an MP3 to
+    /// a lower bitrate, where source and target codec match but bitrate does
+    /// not. Without this flag, bbt treats matching codec+container as "already
+    /// satisfies" and skips the file, which is wrong for same-codec re-rates.
+    #[arg(long)]
+    pub no_skip: bool,
 }
 
 #[derive(Args, Debug)]

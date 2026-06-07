@@ -117,7 +117,31 @@ bbt transcode <inputs...> --codec <codec> [--container <fmt>] [--bitrate <kbps>]
 | `--source-root <dir>` | Root for computing relative output paths |
 | `--manifest <file>` | Where to save the manifest (default: `<output>/manifest.json`) |
 | `--stop-on-error` | Abort the entire batch on the first failure |
+| `--no-skip` | Always encode every input to the requested spec — disable the "already in target format" check (see below) |
 | `--json` | Emit NDJSON progress events to stdout (see [JSON output](#json-output)) |
+
+### Caller-authoritative encoding (`--no-skip`)
+
+By default, `bbt transcode` skips inputs whose codec and container already
+match the target — useful for batch library scans where you don't want to
+needlessly re-encode files that are already in the right format.
+
+But that check only compares **codec + container**, not bitrate, mode, or
+sample rate. If you've already decided an encode is required — e.g.
+re-rating a 320 kbps MP3 down to 128 kbps, where the codec doesn't change —
+the default skip check fires incorrectly and `bbt transcode` exits 0 having
+written nothing.
+
+Pass `--no-skip` when you are the planner and bbt should simply execute:
+
+```bash
+bbt transcode "track.mp3" --codec mp3 --bitrate 128 --output ./out/ --no-skip
+```
+
+With `--no-skip`, every input becomes exactly one encode job — bbt does not
+re-evaluate whether the encode is "necessary". If no job can be planned for
+an input under `--no-skip` (e.g. nothing decodable was found), bbt exits
+non-zero rather than silently producing an empty output directory.
 
 Relative directory structure is preserved. If you transcode `Music/Artist/Album/track.flac` with `--source-root Music/` and `--output Transcoded/`, the output is `Transcoded/Artist/Album/track.mp3`.
 
