@@ -446,6 +446,21 @@ Re-run failures: `bbt resume manifest.json`
 
 ---
 
+## Verifying releases
+
+- **macOS**: binaries are signed with an Apple Developer ID and notarized.
+- **Windows**: `bbt.exe` and `atracdenc.exe` are signed via SSL.com eSigner.
+- **Linux**: the release archive is detached-signed with GPG. Each release includes `bbt-linux-x86_64.tar.gz.asc` alongside the archive. Verify with:
+
+  ```
+  gpg --import release-signing-pubkey.asc
+  gpg --verify bbt-linux-x86_64.tar.gz.asc bbt-linux-x86_64.tar.gz
+  ```
+
+  Public key: [release-signing-pubkey.asc](release-signing-pubkey.asc) (fingerprint `1735 20FA 7DE5 2E29 5DA2  F8EB 03CF 0FBC 7B1B DDB0`).
+
+---
+
 ## License
 
 Mozilla Public License 2.0 — see [LICENSE](LICENSE).

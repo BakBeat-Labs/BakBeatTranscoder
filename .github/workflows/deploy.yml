@@ -222,7 +222,10 @@ jobs:
       #                     KEYCHAIN_PASSWORD, APPLE_DEVELOPER_IDENTITY,
       #                     APPLE_ID, APPLE_APP_PASSWORD, APPLE_TEAM_ID
       #
-      # Linux: No code signing. GPG signing of release assets can be added if needed.
+      # Linux: No binary code signing equivalent. Instead, the release archive is
+      #   detached-signed with GPG so users can verify provenance.
+      #   Required secrets: GPG_PRIVATE_KEY (armored private key),
+      #                     GPG_PASSPHRASE, GPG_KEY_ID
 
       # ── Windows: SSL.com eSigner ───────────────────────────────────────────
 
@@ -323,11 +326,33 @@ jobs:
           Compress-Archive -Path dist\* -DestinationPath ${{ matrix.archive }}
         shell: powershell
 
+      # ── Linux: GPG-sign the release archive ─────────────────────────────────
+
+      - name: Import GPG signing key
+        if: env.SIGN_CODE == 'true' && matrix.platform == 'linux-x86_64'
+        run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+
+      - name: GPG-sign release archive (Linux)
+        if: env.SIGN_CODE == 'true' && matrix.platform == 'linux-x86_64'
+        run: |
+          gpg --batch --pinentry-mode loopback \
+            --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+            --local-user "${{ secrets.GPG_KEY_ID }}" \
+            --detach-sign --armor ${{ matrix.archive }}
+
       - name: Upload signed artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
           path: ${{ matrix.archive }}
+          retention-days: 7
+
+      - name: Upload GPG signature (Linux)
+        if: env.SIGN_CODE == 'true' && matrix.platform == 'linux-x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-signature
+          path: ${{ matrix.archive }}.asc
           retention-days: 7
 
   # ── GitHub Release ───────────────────────────────────────────────────────────
@@ -344,7 +369,7 @@ jobs:
         uses: actions/download-artifact@v4
 
       - name: List downloaded artifacts
-        run: find . -name "*.tar.gz" -o -name "*.zip" | sort
+        run: find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.asc" | sort
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -357,6 +382,7 @@ jobs:
             macos-universal/bbt-macos-universal.tar.gz
             windows-x86_64/bbt-windows-x86_64.zip
             linux-x86_64/bbt-linux-x86_64.tar.gz
+            linux-x86_64-signature/bbt-linux-x86_64.tar.gz.asc
           body: |
             ## BakBeat Transcoder ${{ github.ref_name }}
 
@@ -371,6 +397,16 @@ jobs:
             Each archive contains: `bbt`, `ffmpeg`, `ffprobe`, `atracdenc`
 
             Extract and place all binaries in the same directory. See the [README](https://github.com/${{ github.repository }}#readme) for usage.
+
+            ### Verifying the Linux release
+
+            The Linux archive is signed with our GPG key. `bbt-linux-x86_64.tar.gz.asc` is a detached signature:
+
+            ```
+            gpg --verify bbt-linux-x86_64.tar.gz.asc bbt-linux-x86_64.tar.gz
+            ```
+
+            See the [README](https://github.com/${{ github.repository }}#readme) for the public key.
 
             ### Bundled tools
             - FFmpeg (LGPL — audio/video encoding)
