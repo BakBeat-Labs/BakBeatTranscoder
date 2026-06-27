@@ -24,11 +24,6 @@ jobs:
             runner: macos-latest
             archive: bbt-macos-universal.tar.gz
 
-          # Windows x86_64
-          - platform: windows-x86_64
-            runner: windows-latest
-            archive: bbt-windows-x86_64.zip
-
           # Linux x86_64 (musl static — no glibc dependency)
           - platform: linux-x86_64
             runner: ubuntu-latest
@@ -78,14 +73,6 @@ jobs:
             target/x86_64-apple-darwin/release/bbt \
             -output dist/bbt
 
-      - name: Build bbt (Windows)
-        if: matrix.platform == 'windows-x86_64'
-        run: |
-          cargo build --release --target x86_64-pc-windows-msvc
-          New-Item -ItemType Directory -Force -Path dist
-          Copy-Item target\x86_64-pc-windows-msvc\release\bbt.exe dist\bbt.exe
-        shell: powershell
-
       - name: Build bbt (Linux)
         if: matrix.platform == 'linux-x86_64'
         run: |
@@ -95,7 +82,7 @@ jobs:
 
       # ── Bundle FFmpeg + ffprobe ────────────────────────────────────────────
       # Static builds only — dynamically linked binaries won't work on end-user machines.
-      # Sources: evermeet.cx (macOS), BtbN LGPL essentials (Windows), johnvansickle (Linux).
+      # Sources: evermeet.cx (macOS), BtbN LGPL essentials (Linux).
       # LGPL-only builds — no GPL codecs bundled. See README for licensing details.
 
       - name: Bundle FFmpeg (macOS)
@@ -107,35 +94,6 @@ jobs:
           unzip -j ffmpeg.zip ffmpeg -d dist/
           unzip -j ffprobe.zip ffprobe -d dist/
           chmod +x dist/ffmpeg dist/ffprobe
-
-      - name: Bundle FFmpeg (Windows)
-        if: matrix.platform == 'windows-x86_64'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # BtbN LGPL essentials — no GPL codecs.
-          # BtbN marks all releases as pre-releases so gh release download skips them.
-          $releases = Invoke-RestMethod `
-            -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases" `
-            -Headers @{Authorization = "Bearer $env:GH_TOKEN"}
-
-          # Print available assets so we can see exact naming if the pattern needs updating
-          Write-Host "=== Latest BtbN release: $($releases[0].tag_name) ==="
-          $releases[0].assets | ForEach-Object { Write-Host "  $($_.name)" }
-
-          # Search across recent releases for any win64 lgpl asset
-          $asset = $null
-          foreach ($rel in $releases) {
-            $asset = $rel.assets | Where-Object { $_.name -match "win64" -and $_.name -match "lgpl" } | Select-Object -First 1
-            if ($asset) { break }
-          }
-          if (-not $asset) { Write-Error "No win64 lgpl asset found in recent BtbN releases"; exit 1 }
-          Write-Host "Downloading $($asset.name)"
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg-win.zip
-          Expand-Archive ffmpeg-win.zip -DestinationPath ffmpeg-tmp
-          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffmpeg.exe  | Select-Object -First 1).FullName dist\ffmpeg.exe
-          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName dist\ffprobe.exe
-        shell: powershell
 
       - name: Bundle FFmpeg (Linux)
         if: matrix.platform == 'linux-x86_64'
@@ -197,28 +155,6 @@ jobs:
           cp "$BIN" dist/atracdenc
           chmod +x dist/atracdenc
 
-      - name: Set up MSVC environment (Windows)
-        if: matrix.platform == 'windows-x86_64'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Build atracdenc (Windows)
-        if: matrix.platform == 'windows-x86_64'
-        run: |
-          # Static libsndfile via vcpkg — no extra DLL needed in the bundle
-          vcpkg install libsndfile:x64-windows-static
-          git clone --depth 1 --recurse-submodules https://github.com/dcherednik/atracdenc.git atracdenc-src
-          cmake -S atracdenc-src -B atracdenc-build `
-            -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static
-          cmake --build atracdenc-build --config Release
-          $exe = Get-ChildItem atracdenc-build -Recurse -Filter "atracdenc.exe" | Select-Object -First 1
-          Copy-Item $exe.FullName dist\atracdenc.exe
-        shell: powershell
-
       - name: Build atracdenc (Linux)
         if: matrix.platform == 'linux-x86_64'
         run: |
@@ -232,19 +168,11 @@ jobs:
 
       # ── Package ────────────────────────────────────────────────────────────
 
-      - name: Package (macOS / Linux)
-        if: runner.os != 'Windows'
+      - name: Package
         run: |
           ls -lh dist/
           cd dist
           tar -czf ../${{ matrix.archive }} .
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          Get-ChildItem dist\
-          Compress-Archive -Path dist\* -DestinationPath ${{ matrix.archive }}
-        shell: powershell
 
       # ── Upload artifact ────────────────────────────────────────────────────
 

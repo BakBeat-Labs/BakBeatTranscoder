@@ -449,7 +449,7 @@ Re-run failures: `bbt resume manifest.json`
 ## Verifying releases
 
 - **macOS**: binaries are signed with an Apple Developer ID and notarized.
-- **Windows**: `bbt.exe` and `atracdenc.exe` are signed via SSL.com eSigner.
+- **Windows**: built and signed locally, not part of the automated release pipeline.
 - **Linux**: the release archive is detached-signed with GPG. Each release includes `bbt-linux-x86_64.tar.gz.asc` alongside the archive. Verify with:
 
   ```
