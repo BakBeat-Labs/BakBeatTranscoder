@@ -44,12 +44,20 @@ impl FfmpegAdapter {
         // the disposition flag marks it as the front-cover attached picture
         // in the output container (ID3 APIC for MP3, covr atom for MP4/M4A).
         if p.media_type == MediaType::Audio {
-            args.extend([
-                "-map".into(), "0:a".into(),
-                "-map".into(), "0:v?".into(),
-                "-c:v".into(), "copy".into(),
-                "-disposition:v:0".into(), "attached_pic".into(),
-            ]);
+            args.extend(["-map".into(), "0:a".into()]);
+
+            // ASF/WMA support for embedded artwork is inconsistent across old
+            // players and can make ffmpeg reject otherwise valid transcodes.
+            if p.audio_codec != "wma" {
+                args.extend([
+                    "-map".into(),
+                    "0:v?".into(),
+                    "-c:v".into(),
+                    "copy".into(),
+                    "-disposition:v:0".into(),
+                    "attached_pic".into(),
+                ]);
+            }
         }
 
         args.extend(["-map_metadata".into(), "0".into()]);
@@ -94,8 +102,10 @@ impl FfmpegAdapter {
                     }
                     "vorbis" => {
                         args.extend([
-                            "-minrate".into(), format!("{kbps}k"),
-                            "-maxrate".into(), format!("{kbps}k"),
+                            "-minrate".into(),
+                            format!("{kbps}k"),
+                            "-maxrate".into(),
+                            format!("{kbps}k"),
                         ]);
                     }
                     "opus" => {
@@ -115,7 +125,10 @@ impl FfmpegAdapter {
         if let Some(trim) = &p.gapless_trim {
             args.extend([
                 "-af".into(),
-                format!("atrim=end_sample={},asetpts=PTS-STARTPTS", trim.output_frames),
+                format!(
+                    "atrim=end_sample={},asetpts=PTS-STARTPTS",
+                    trim.output_frames
+                ),
             ]);
         }
 
@@ -136,10 +149,28 @@ impl EncoderAdapter for FfmpegAdapter {
     fn supported_output_codecs(&self) -> &[&str] {
         &[
             // Audio
-            "mp3", "aac", "flac", "vorbis", "opus",
-            "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "wav",
+            "mp3",
+            "aac",
+            "flac",
+            "vorbis",
+            "opus",
+            "wma",
+            "alac",
+            "pcm_s16le",
+            "pcm_s24le",
+            "pcm_s32le",
+            "pcm_f32le",
+            "wav",
             // Video
-            "h264", "avc", "h265", "hevc", "mpeg4", "mpeg2", "vp8", "vp9", "av1",
+            "h264",
+            "avc",
+            "h265",
+            "hevc",
+            "mpeg4",
+            "mpeg2",
+            "vp8",
+            "vp9",
+            "av1",
         ]
     }
 
@@ -182,9 +213,9 @@ impl EncoderAdapter for FfmpegAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::EncodeParams;
     use std::collections::BTreeMap;
     use uuid::Uuid;
-    use crate::graph::EncodeParams;
 
     fn audio_node(audio_codec: &str, container: &str) -> ExecutionNode {
         ExecutionNode {
@@ -217,42 +248,71 @@ mod tests {
     }
 
     fn windows_containing<'a>(args: &'a [String], first: &str) -> Option<&'a str> {
-        args.windows(2).find(|w| w[0] == first).map(|w| w[1].as_str())
+        args.windows(2)
+            .find(|w| w[0] == first)
+            .map(|w| w[1].as_str())
     }
 
     #[test]
     fn audio_transcode_maps_audio_and_optional_cover_art() {
-        let adapter = FfmpegAdapter { binary: "/usr/bin/ffmpeg".into() };
+        let adapter = FfmpegAdapter {
+            binary: "/usr/bin/ffmpeg".into(),
+        };
         let args = adapter.build_args(&audio_node("mp3", "mp3")).unwrap();
 
         // Must map the audio track explicitly and the optional embedded-art
         // video stream — replacing the old blanket `-vn` that dropped cover art.
-        assert!(!args.contains(&"-vn".to_string()), "must not blanket-strip video/art streams");
+        assert!(
+            !args.contains(&"-vn".to_string()),
+            "must not blanket-strip video/art streams"
+        );
         assert_eq!(windows_containing(&args, "-map"), Some("0:a"));
         assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v?"));
         assert_eq!(windows_containing(&args, "-c:v"), Some("copy"));
-        assert_eq!(windows_containing(&args, "-disposition:v:0"), Some("attached_pic"));
+        assert_eq!(
+            windows_containing(&args, "-disposition:v:0"),
+            Some("attached_pic")
+        );
     }
 
     #[test]
     fn mp3_target_uses_id3v2_3_for_device_compatibility() {
-        let adapter = FfmpegAdapter { binary: "/usr/bin/ffmpeg".into() };
+        let adapter = FfmpegAdapter {
+            binary: "/usr/bin/ffmpeg".into(),
+        };
         let args = adapter.build_args(&audio_node("mp3", "mp3")).unwrap();
         assert_eq!(windows_containing(&args, "-id3v2_version"), Some("3"));
     }
 
     #[test]
     fn non_mp3_target_does_not_force_id3v2_version() {
-        let adapter = FfmpegAdapter { binary: "/usr/bin/ffmpeg".into() };
+        let adapter = FfmpegAdapter {
+            binary: "/usr/bin/ffmpeg".into(),
+        };
         let args = adapter.build_args(&audio_node("alac", "m4a")).unwrap();
         assert_eq!(windows_containing(&args, "-id3v2_version"), None);
     }
 
     #[test]
     fn always_maps_source_metadata() {
-        let adapter = FfmpegAdapter { binary: "/usr/bin/ffmpeg".into() };
+        let adapter = FfmpegAdapter {
+            binary: "/usr/bin/ffmpeg".into(),
+        };
         let args = adapter.build_args(&audio_node("mp3", "mp3")).unwrap();
         assert_eq!(windows_containing(&args, "-map_metadata"), Some("0"));
+    }
+
+    #[test]
+    fn wma_target_uses_wmav2_and_skips_cover_art_mapping() {
+        let adapter = FfmpegAdapter {
+            binary: "/usr/bin/ffmpeg".into(),
+        };
+        let args = adapter.build_args(&audio_node("wma", "wma")).unwrap();
+
+        assert_eq!(windows_containing(&args, "-codec:a"), Some("wmav2"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:a"));
+        assert!(!args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v?"));
+        assert_eq!(windows_containing(&args, "-c:v"), None);
     }
 }
 
@@ -261,26 +321,27 @@ mod tests {
 fn audio_codec_to_ffmpeg(codec: &str) -> Result<&'static str, AdapterError> {
     match codec {
         // Audio
-        "mp3"       => Ok("libmp3lame"),
-        "aac"       => Ok("aac"),
-        "flac"      => Ok("flac"),
-        "vorbis"    => Ok("libvorbis"),
-        "opus"      => Ok("libopus"),
-        "alac"      => Ok("alac"),
+        "mp3" => Ok("libmp3lame"),
+        "aac" => Ok("aac"),
+        "flac" => Ok("flac"),
+        "vorbis" => Ok("libvorbis"),
+        "opus" => Ok("libopus"),
+        "wma" => Ok("wmav2"),
+        "alac" => Ok("alac"),
         "pcm_s16le" => Ok("pcm_s16le"),
         "pcm_s16be" => Ok("pcm_s16be"),
         "pcm_s24le" => Ok("pcm_s24le"),
         "pcm_s32le" => Ok("pcm_s32le"),
         "pcm_f32le" => Ok("pcm_f32le"),
-        "wav"       => Ok("pcm_s16le"),
+        "wav" => Ok("pcm_s16le"),
         // Video
-        "h264" | "avc"   => Ok("libx264"),
-        "h265" | "hevc"  => Ok("libx265"),
-        "mpeg4"          => Ok("mpeg4"),
-        "mpeg2"          => Ok("mpeg2video"),
-        "vp8"            => Ok("libvpx"),
-        "vp9"            => Ok("libvpx-vp9"),
-        "av1"            => Ok("libaom-av1"),
+        "h264" | "avc" => Ok("libx264"),
+        "h265" | "hevc" => Ok("libx265"),
+        "mpeg4" => Ok("mpeg4"),
+        "mpeg2" => Ok("mpeg2video"),
+        "vp8" => Ok("libvpx"),
+        "vp9" => Ok("libvpx-vp9"),
+        "av1" => Ok("libaom-av1"),
         other => Err(AdapterError::UnsupportedCodec(other.to_string())),
     }
 }

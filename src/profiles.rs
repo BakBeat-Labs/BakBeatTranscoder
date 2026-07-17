@@ -28,11 +28,11 @@ pub struct DeviceProfile {
     #[serde(default)]
     pub media_type: MediaType,
 
-    /// Target container (e.g. "mp3", "m4a", "ogg", "oma", "wav", "mp4")
+    /// Target container (e.g. "mp3", "m4a", "ogg", "asf", "oma", "wav", "mp4")
     pub container: String,
 
     // ── Audio track ───────────────────────────────────────────────────────────
-    /// Audio codec (e.g. "mp3", "aac", "flac", "vorbis", "atrac1", "atrac3")
+    /// Audio codec (e.g. "mp3", "aac", "flac", "vorbis", "wma", "atrac1", "atrac3")
     pub audio_codec: String,
     /// Audio bitrate in kbps. Required for lossy codecs.
     pub audio_bitrate_kbps: Option<u32>,
@@ -127,15 +127,46 @@ fn builtin_profile(id: &str) -> Option<DeviceProfile> {
 
 // Built-in profiles are embedded at compile time.
 static BUILTIN_PROFILES: &[(&str, &str)] = &[
-    ("minidisc-sp",       include_str!("../profiles/minidisc-sp.toml")),
-    ("minidisc-lp2",      include_str!("../profiles/minidisc-lp2.toml")),
-    ("minidisc-lp4",      include_str!("../profiles/minidisc-lp4.toml")),
-    ("himd-sp",           include_str!("../profiles/himd-sp.toml")),
-    ("generic-mp3-128",   include_str!("../profiles/generic-mp3-128.toml")),
-    ("generic-mp3-192",   include_str!("../profiles/generic-mp3-192.toml")),
-    ("generic-mp3-320",   include_str!("../profiles/generic-mp3-320.toml")),
-    ("generic-aac-128",   include_str!("../profiles/generic-aac-128.toml")),
-    ("generic-aac-256",   include_str!("../profiles/generic-aac-256.toml")),
-    ("generic-flac",      include_str!("../profiles/generic-flac.toml")),
-    ("generic-ogg-192",   include_str!("../profiles/generic-ogg-192.toml")),
+    ("minidisc-sp", include_str!("../profiles/minidisc-sp.toml")),
+    (
+        "minidisc-lp2",
+        include_str!("../profiles/minidisc-lp2.toml"),
+    ),
+    (
+        "minidisc-lp4",
+        include_str!("../profiles/minidisc-lp4.toml"),
+    ),
+    ("himd-sp", include_str!("../profiles/himd-sp.toml")),
+    (
+        "generic-mp3-128",
+        include_str!("../profiles/generic-mp3-128.toml"),
+    ),
+    (
+        "generic-mp3-192",
+        include_str!("../profiles/generic-mp3-192.toml"),
+    ),
+    (
+        "generic-mp3-320",
+        include_str!("../profiles/generic-mp3-320.toml"),
+    ),
+    (
+        "generic-aac-128",
+        include_str!("../profiles/generic-aac-128.toml"),
+    ),
+    (
+        "generic-aac-256",
+        include_str!("../profiles/generic-aac-256.toml"),
+    ),
+    (
+        "generic-flac",
+        include_str!("../profiles/generic-flac.toml"),
+    ),
+    (
+        "generic-ogg-192",
+        include_str!("../profiles/generic-ogg-192.toml"),
+    ),
+    (
+        "creative-zen-nano-plus-wma",
+        include_str!("../profiles/creative-zen-nano-plus-wma.toml"),
+    ),
 ];

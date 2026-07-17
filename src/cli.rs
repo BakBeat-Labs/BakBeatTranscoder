@@ -69,11 +69,11 @@ pub struct TranscodeArgs {
     #[arg(short, long, conflicts_with = "codec")]
     pub profile: Option<String>,
 
-    /// Output codec (e.g. mp3, aac, flac, vorbis, opus, alac, atrac3).
+    /// Output codec (e.g. mp3, aac, flac, vorbis, opus, alac, wma, atrac3).
     #[arg(long, conflicts_with = "profile")]
     pub codec: Option<String>,
 
-    /// Output container (e.g. mp3, m4a, ogg, wav, oma).
+    /// Output container (e.g. mp3, m4a, ogg, wav, asf, oma).
     /// Defaults to the codec value when not specified.
     #[arg(long, conflicts_with = "profile")]
     pub container: Option<String>,
@@ -137,12 +137,16 @@ pub struct PlanArgs {
     #[arg(short, long, conflicts_with = "codec")]
     pub profile: Option<String>,
 
+    /// Output codec (e.g. mp3, aac, flac, vorbis, opus, alac, wma, atrac3).
     #[arg(long, conflicts_with = "profile")]
     pub codec: Option<String>,
 
+    /// Output container (e.g. mp3, m4a, ogg, wav, asf, oma).
+    /// Defaults to the codec value when not specified.
     #[arg(long, conflicts_with = "profile")]
     pub container: Option<String>,
 
+    /// Output file extension. Defaults to container when not specified.
     #[arg(long, conflicts_with = "profile")]
     pub extension: Option<String>,
 

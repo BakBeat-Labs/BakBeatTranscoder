@@ -1,0 +1,12 @@
+id          = "creative-zen-nano-plus-wma"
+name        = "Creative Zen Nano Plus WMA"
+vendor      = "Creative"
+description = "Windows Media Audio 2 at 128 kbps CBR, 44.1 kHz stereo for the Creative Zen Nano Plus and similar WMA-era flash players."
+container   = "asf"
+audio_codec       = "wma"
+audio_bitrate_kbps = 128
+sample_rate_hz = 44100
+channels    = 2
+cbr         = true
+extension   = "wma"
+notes       = "Requires FFmpeg with the native wmav2 encoder. Produces DRM-free ASF/WMA files for legacy device compatibility."

@@ -34,7 +34,7 @@ The manifest is the ground truth record of what was produced. You can re-verify 
 
 **If you're using `bbt` standalone**, the platform releases from this repository include FFmpeg, ffprobe, and atracdenc bundled alongside the `bbt` binary — just download the release for your platform and everything works. Alternatively:
 
-- [FFmpeg](https://ffmpeg.org) — required for most transcoding (MP3, AAC, FLAC, OGG, Opus, ALAC, WAV, video). ffprobe ships with it and handles video probing.
+- [FFmpeg](https://ffmpeg.org) — required for most transcoding (MP3, AAC, FLAC, OGG, Opus, ALAC, WAV, WMA, video). ffprobe ships with it and handles video probing.
 - [atracdenc](https://github.com/dcherednik/atracdenc) — required for MiniDisc ATRAC encoding (SP, LP2, LP4).
 
 Install these via your package manager, or drop the binaries in the same directory as `bbt` and they will be found automatically.
@@ -75,8 +75,14 @@ bbt transcode ~/Music/Artist/ --profile generic-mp3-320 --output ~/Transcoded/
 # Transcode for MiniDisc LP2
 bbt transcode ~/Music/ --profile minidisc-lp2 --output ~/ForMinidisc/
 
+# Transcode for a Creative Zen Nano Plus or similar WMA-era player
+bbt transcode ~/Music/ --profile creative-zen-nano-plus-wma --output ~/ForZenNano/
+
 # Specify format manually without a profile
 bbt transcode track.flac --codec mp3 --bitrate 192 --output ./out/
+
+# Manual WMA: ASF container, .wma extension
+bbt transcode track.mp3 --codec wma --container asf --extension wma --bitrate 128 --output ./out/
 
 # Probe a file to see its format and metadata
 bbt probe track.flac
@@ -106,7 +112,7 @@ bbt transcode <inputs...> --codec <codec> [--container <fmt>] [--bitrate <kbps>]
 | Flag | Description |
 |---|---|
 | `--profile <id>` | Use a built-in or custom device profile |
-| `--codec <codec>` | Audio codec: `mp3`, `aac`, `flac`, `vorbis`, `opus`, `alac`, `atrac3` |
+| `--codec <codec>` | Audio codec: `mp3`, `aac`, `flac`, `vorbis`, `opus`, `alac`, `wma`, `atrac3` |
 | `--container <fmt>` | Container format. Defaults to codec value. |
 | `--extension <ext>` | Output file extension. Defaults to container. |
 | `--bitrate <kbps>` | Audio bitrate in kbps |
@@ -253,6 +259,7 @@ Profiles are TOML files that declare what format, codec, and parameters a target
 | `generic-aac-256` | AAC-LC 256 kbps | Transparent AAC quality |
 | `generic-flac` | FLAC lossless | Archival or lossless-capable devices |
 | `generic-ogg-192` | Vorbis 192 kbps CBR | Rockbox and Ogg-capable players |
+| `creative-zen-nano-plus-wma` | WMA 128 kbps CBR | Creative Zen Nano Plus and similar WMA-era flash players |
 
 ### Writing a custom profile
 
