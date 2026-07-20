@@ -19,7 +19,7 @@ later (LGPL-2.1+). Some bundled FFmpeg builds may be configured with
 additional codec libraries under their own terms; inspect `ffmpeg -version`
 in the release archive for the exact build configuration.
 Source:   https://ffmpeg.org  /  https://git.ffmpeg.org/ffmpeg.git
-macOS arm64 build source: https://github.com/Vargol/ffmpeg-apple-arm64-build
+macOS arm64 tools source: https://github.com/kiimelon/FFmpeg-arm-silicon
 Copyright © 2000–present the FFmpeg developers
 
 The full text of the LGPL 2.1 is available at:

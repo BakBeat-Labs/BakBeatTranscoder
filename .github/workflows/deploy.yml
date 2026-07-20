@@ -121,18 +121,14 @@ jobs:
       - name: Bundle FFmpeg (macOS)
         if: matrix.platform == 'macos-arm64'
         run: |
-          # Vargol's build scripts target Apple Silicon FFmpeg/ffprobe with
-          # arm64 NEON fixes carried forward from Apple/HandBrake work.
-          git clone --depth 1 --branch 7.0.1 \
-            https://github.com/Vargol/ffmpeg-apple-arm64-build.git \
-            ffmpeg-apple-arm64-build
-          mkdir ffmpeg-apple-arm64-work
-          cd ffmpeg-apple-arm64-work
-          bash ../ffmpeg-apple-arm64-build/build.sh
-          cd ..
-          cp ffmpeg-apple-arm64-work/out/bin/ffmpeg dist/ffmpeg
-          cp ffmpeg-apple-arm64-work/out/bin/ffprobe dist/ffprobe
-          rm -rf ffmpeg-apple-arm64-build ffmpeg-apple-arm64-work
+          FFMPEG_URL="https://github.com/kiimelon/FFmpeg-arm-silicon/releases/download/0.5.0/FFmpeg-arm-silicon-Tools-20260424.zip"
+          FFMPEG_SHA256="7262b3ff400c0e88235647d99ab79067010694f059c4aa8af0bb0c43a951b2fc"
+
+          curl -fSL "$FFMPEG_URL" -o ffmpeg-macos-arm64.zip
+          echo "$FFMPEG_SHA256  ffmpeg-macos-arm64.zip" | shasum -a 256 -c -
+          unzip -q ffmpeg-macos-arm64.zip -d ffmpeg-macos-arm64
+          cp ffmpeg-macos-arm64/Tools/ffmpeg dist/ffmpeg
+          cp ffmpeg-macos-arm64/Tools/ffprobe dist/ffprobe
           chmod +x dist/ffmpeg dist/ffprobe
           lipo -archs dist/ffmpeg | grep -qw arm64
           lipo -archs dist/ffprobe | grep -qw arm64
