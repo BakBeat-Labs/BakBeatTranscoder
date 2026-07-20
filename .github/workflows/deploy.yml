@@ -120,24 +120,19 @@ jobs:
 
       - name: Bundle FFmpeg (macOS)
         if: matrix.platform == 'macos-arm64'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          # Vargol's build packages Apple Silicon FFmpeg/ffprobe with arm64
-          # NEON fixes carried forward from Apple/HandBrake work.
-          ASSET_URL=$(curl -fSL \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/Vargol/ffmpeg-apple-arm64-build/releases/latest" \
-            | jq -r '.assets[] | select(.name == "ffmpeg-success.zip") | .browser_download_url' \
-            | head -1)
-          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-            ASSET_URL="https://github.com/Vargol/ffmpeg-apple-arm64-build/releases/latest/download/ffmpeg-success.zip"
-          fi
-          echo "Downloading: $ASSET_URL"
-          curl -fSL "$ASSET_URL" -o ffmpeg-apple-arm64.zip
-          unzip -q ffmpeg-apple-arm64.zip -d ffmpeg-apple-arm64
-          cp "$(find ffmpeg-apple-arm64 -type f -name ffmpeg | head -1)" dist/ffmpeg
-          cp "$(find ffmpeg-apple-arm64 -type f -name ffprobe | head -1)" dist/ffprobe
+          # Vargol's build scripts target Apple Silicon FFmpeg/ffprobe with
+          # arm64 NEON fixes carried forward from Apple/HandBrake work.
+          git clone --depth 1 --branch 7.0.1 \
+            https://github.com/Vargol/ffmpeg-apple-arm64-build.git \
+            ffmpeg-apple-arm64-build
+          mkdir ffmpeg-apple-arm64-work
+          cd ffmpeg-apple-arm64-work
+          bash ../ffmpeg-apple-arm64-build/build.sh
+          cd ..
+          cp ffmpeg-apple-arm64-work/out/bin/ffmpeg dist/ffmpeg
+          cp ffmpeg-apple-arm64-work/out/bin/ffprobe dist/ffprobe
+          rm -rf ffmpeg-apple-arm64-build ffmpeg-apple-arm64-work
           chmod +x dist/ffmpeg dist/ffprobe
           lipo -archs dist/ffmpeg | grep -qw arm64
           lipo -archs dist/ffprobe | grep -qw arm64
