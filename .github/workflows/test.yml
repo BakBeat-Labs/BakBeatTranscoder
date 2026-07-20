@@ -120,12 +120,13 @@ jobs:
       # ── Build atracdenc from source ────────────────────────────────────────
       # atracdenc requires libsndfile for PCM I/O.
       #
-      # macOS note: we build arm64 only, matching the Apple Silicon release target.
+      # macOS note: atracdenc's build still emits a Universal binary internally,
+      # so libsndfile must provide both slices. We thin the packaged binary to arm64.
 
       - name: Build atracdenc (macOS)
         if: matrix.platform == 'macos-arm64'
         run: |
-          # Build libsndfile and install to a local prefix.
+          # Build Universal libsndfile and install to a local prefix.
           # CMAKE_PREFIX_PATH tells cmake's find_library/find_path to look there first,
           # which is more reliable than setting individual SNDFILE_* variables.
           SNDFILE_PREFIX=$(pwd)/libsndfile-install
@@ -133,7 +134,7 @@ jobs:
           git clone --depth 1 https://github.com/libsndfile/libsndfile.git libsndfile-src
           cmake -S libsndfile-src -B libsndfile-build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DBUILD_SHARED_LIBS=OFF \
             -DENABLE_EXTERNAL_LIBS=OFF \
@@ -148,9 +149,13 @@ jobs:
             -DCMAKE_PREFIX_PATH="$SNDFILE_PREFIX"
           cmake --build atracdenc-build --config Release
           BIN=$(find atracdenc-build -name "atracdenc" -not -name "*.cmake" -type f | head -1)
-          cp "$BIN" dist/atracdenc
+          if [ "$(lipo -archs "$BIN")" = "arm64" ]; then
+            cp "$BIN" dist/atracdenc
+          else
+            lipo "$BIN" -thin arm64 -output dist/atracdenc
+          fi
           chmod +x dist/atracdenc
-          lipo -archs dist/atracdenc | grep -qw arm64
+          test "$(lipo -archs dist/atracdenc)" = "arm64"
 
       - name: Build atracdenc (Linux)
         if: matrix.platform == 'linux-x86_64'
