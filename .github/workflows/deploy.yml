@@ -242,6 +242,13 @@ jobs:
           security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PWD" \
             -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep -F "Developer ID Application:"; then
+            echo "Expected a Developer ID Application certificate for Gatekeeper distribution." >&2
+            echo "The imported certificate is probably an Apple Development certificate." >&2
+            exit 1
+          fi
 
       - name: Sign macOS binaries (Apple Developer ID)
         if: env.SIGN_CODE == 'true' && matrix.platform == 'macos-arm64'
@@ -251,6 +258,11 @@ jobs:
               --sign "${{ secrets.APPLE_DEVELOPER_IDENTITY }}" \
               "$binary"
             codesign --verify --verbose "$binary"
+            if ! codesign -dv --verbose=4 "$binary" 2>&1 \
+              | grep -F "Authority=Developer ID Application:"; then
+              echo "$binary was not signed with a Developer ID Application certificate." >&2
+              exit 1
+            fi
           done
 
       - name: Notarize macOS binaries
