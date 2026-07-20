@@ -8,14 +8,18 @@ in or distributed alongside BakBeat Transcoder (bbt).
 PART 1 — BUNDLED EXTERNAL TOOLS
 ─────────────────────────────────────────────────────────────────────────────
 
-Platform release archives (bbt-macos-universal.tar.gz, bbt-windows-x86_64.zip,
+Platform release archives (bbt-macos-arm64.tar.gz, bbt-windows-x86_64.zip,
 bbt-linux-x86_64.tar.gz) bundle the following tools as standalone executables.
 They are invoked as external subprocesses and are not linked into bbt.
 
 1.1  FFmpeg and ffprobe
 ───────────────────────
-License:  GNU Lesser General Public License version 2.1 or later (LGPL-2.1+)
+License:  FFmpeg core is GNU Lesser General Public License version 2.1 or
+later (LGPL-2.1+). Some bundled FFmpeg builds may be configured with
+additional codec libraries under their own terms; inspect `ffmpeg -version`
+in the release archive for the exact build configuration.
 Source:   https://ffmpeg.org  /  https://git.ffmpeg.org/ffmpeg.git
+macOS arm64 build source: https://github.com/Vargol/ffmpeg-apple-arm64-build
 Copyright © 2000–present the FFmpeg developers
 
 The full text of the LGPL 2.1 is available at:

@@ -62,7 +62,7 @@ cargo build --release
 cargo install --path .
 ```
 
-Requires Rust 1.75 or later. Cross-platform: macOS, Linux, Windows.
+Requires Rust 1.75 or later. Cross-platform: macOS, Linux, Windows. Automated macOS release archives target Apple Silicon.
 
 ---
 
@@ -455,7 +455,7 @@ Re-run failures: `bbt resume manifest.json`
 
 ## Verifying releases
 
-- **macOS**: binaries are signed with an Apple Developer ID and notarized.
+- **macOS**: Apple Silicon release binaries are signed with an Apple Developer ID and notarized.
 - **Windows**: built and signed locally, not part of the automated release pipeline.
 - **Linux**: the release archive is detached-signed with GPG. Each release includes `bbt-linux-x86_64.tar.gz.asc` alongside the archive. Verify with:
 
@@ -474,22 +474,22 @@ Mozilla Public License 2.0 — see [LICENSE](LICENSE).
 
 ### Legal separation from BakBeat
 
-BakBeatTranscoder exists as a separate open-source component specifically to maintain a clean legal boundary between [BakBeat](https://bakbeat.com) (a proprietary closed source application) and the LGPL-licensed tools this transcoder depends on.
+BakBeatTranscoder exists as a separate open-source component specifically to maintain a clean legal boundary between [BakBeat](https://bakbeat.com) (a proprietary closed source application) and the separately licensed external tools this transcoder depends on.
 
 ```
 BakBeat (proprietary, commercial)
     ↓ invokes as subprocess — clean process boundary
-bbt (MPL-2.0, this project) ← LGPL compliance sits here
+bbt (MPL-2.0, this project) ← third-party tool compliance sits here
     ↓ invokes as subprocesses
-FFmpeg / ffprobe / atracdenc (LGPL)
+FFmpeg / ffprobe / atracdenc (external tools)
 ```
 
-**BakBeat ships `bbt` and nothing else.** All interaction with LGPL-licensed tools happens inside `bbt`. BakBeat has no LGPL exposure because it never directly distributes, links against, or calls these tools itself.
+**BakBeat ships `bbt` and nothing else.** All interaction with separately licensed external tools happens inside `bbt`. BakBeat avoids direct exposure because it never directly distributes, links against, or calls these tools itself.
 
-**This project** (bbt) distributes FFmpeg, ffprobe, and atracdenc alongside its platform releases. This is bbt's LGPL compliance obligation, not BakBeat's. FFmpeg and atracdenc are called as external subprocesses — never statically or dynamically linked — which means no derivative work is created and the LGPL's copyleft does not extend to bbt's source code.
+**This project** (bbt) distributes FFmpeg, ffprobe, and atracdenc alongside its platform releases. This is bbt's third-party tooling compliance obligation, not BakBeat's. FFmpeg and atracdenc are called as external subprocesses — never statically or dynamically linked — which keeps those tools separate from bbt's source code.
 
 Every release archive includes `LICENSE` (MPL-2.0) and `THIRD-PARTY-LICENSES`, which contains:
-- LGPL-2.1+ attribution and source pointer for FFmpeg/ffprobe
+- FFmpeg/ffprobe attribution, source pointers, and build-configuration license notes
 - LGPL-3.0 attribution and source pointer for atracdenc
 - BSD-3-Clause notice for `encoding_rs` (required for binary redistributions)
 - Unicode-3.0 notice for `unicode-ident` (required for binary redistributions)

@@ -19,10 +19,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS Universal Binary (arm64 + x86_64 combined via lipo)
-          - platform: macos-universal
+          # macOS Apple Silicon (arm64)
+          - platform: macos-arm64
             runner: macos-latest
-            archive: bbt-macos-universal.tar.gz
+            archive: bbt-macos-arm64.tar.gz
 
           # Linux x86_64 (musl static — no glibc dependency)
           - platform: linux-x86_64
@@ -38,11 +38,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Add macOS targets (arm64 + x86_64 for Universal Binary)
-        if: matrix.platform == 'macos-universal'
+      - name: Add macOS target
+        if: matrix.platform == 'macos-arm64'
         run: |
           rustup target add aarch64-apple-darwin
-          rustup target add x86_64-apple-darwin
 
       - name: Add Linux musl target
         if: matrix.platform == 'linux-x86_64'
@@ -62,16 +61,13 @@ jobs:
 
       # ── Build bbt ──────────────────────────────────────────────────────────
 
-      - name: Build bbt (macOS Universal)
-        if: matrix.platform == 'macos-universal'
+      - name: Build bbt (macOS arm64)
+        if: matrix.platform == 'macos-arm64'
         run: |
           cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
           mkdir -p dist
-          lipo -create \
-            target/aarch64-apple-darwin/release/bbt \
-            target/x86_64-apple-darwin/release/bbt \
-            -output dist/bbt
+          cp target/aarch64-apple-darwin/release/bbt dist/bbt
+          lipo -archs dist/bbt | grep -qw arm64
 
       - name: Build bbt (Linux)
         if: matrix.platform == 'linux-x86_64'
@@ -82,18 +78,31 @@ jobs:
 
       # ── Bundle FFmpeg + ffprobe ────────────────────────────────────────────
       # Static builds only — dynamically linked binaries won't work on end-user machines.
-      # Sources: evermeet.cx (macOS), BtbN LGPL essentials (Linux).
-      # LGPL-only builds — no GPL codecs bundled. See README for licensing details.
+      # Sources: Vargol Apple Silicon builds (macOS), BtbN LGPL essentials (Linux).
 
       - name: Bundle FFmpeg (macOS)
-        if: matrix.platform == 'macos-universal'
+        if: matrix.platform == 'macos-arm64'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # evermeet.cx provides static macOS builds (arm64)
-          curl -fSL "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip" -o ffmpeg.zip
-          curl -fSL "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip" -o ffprobe.zip
-          unzip -j ffmpeg.zip ffmpeg -d dist/
-          unzip -j ffprobe.zip ffprobe -d dist/
+          # Vargol's build packages Apple Silicon FFmpeg/ffprobe with arm64
+          # NEON fixes carried forward from Apple/HandBrake work.
+          ASSET_URL=$(curl -fSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/Vargol/ffmpeg-apple-arm64-build/releases/latest" \
+            | jq -r '.assets[] | select(.name == "ffmpeg-success.zip") | .browser_download_url' \
+            | head -1)
+          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+            ASSET_URL="https://github.com/Vargol/ffmpeg-apple-arm64-build/releases/latest/download/ffmpeg-success.zip"
+          fi
+          echo "Downloading: $ASSET_URL"
+          curl -fSL "$ASSET_URL" -o ffmpeg-apple-arm64.zip
+          unzip -q ffmpeg-apple-arm64.zip -d ffmpeg-apple-arm64
+          cp "$(find ffmpeg-apple-arm64 -type f -name ffmpeg | head -1)" dist/ffmpeg
+          cp "$(find ffmpeg-apple-arm64 -type f -name ffprobe | head -1)" dist/ffprobe
           chmod +x dist/ffmpeg dist/ffprobe
+          lipo -archs dist/ffmpeg | grep -qw arm64
+          lipo -archs dist/ffprobe | grep -qw arm64
 
       - name: Bundle FFmpeg (Linux)
         if: matrix.platform == 'linux-x86_64'
@@ -120,17 +129,12 @@ jobs:
       # ── Build atracdenc from source ────────────────────────────────────────
       # atracdenc requires libsndfile for PCM I/O.
       #
-      # macOS note: we build arm64 only (native on the runner). The bbt binary
-      # is Universal; atracdenc arm64 runs transparently via Rosetta 2 on Intel
-      # Macs. Cross-compiling atracdenc for x86_64 against Homebrew's arm64
-      # libsndfile causes an arch mismatch, so we skip the lipo here.
+      # macOS note: we build arm64 only, matching the Apple Silicon release target.
 
       - name: Build atracdenc (macOS)
-        if: matrix.platform == 'macos-universal'
+        if: matrix.platform == 'macos-arm64'
         run: |
-          # atracdenc's CMakeLists.txt forces a Universal Binary build, so we need
-          # a Universal libsndfile. Homebrew only ships arm64.
-          # Build libsndfile as Universal and install to a local prefix.
+          # Build libsndfile and install to a local prefix.
           # CMAKE_PREFIX_PATH tells cmake's find_library/find_path to look there first,
           # which is more reliable than setting individual SNDFILE_* variables.
           SNDFILE_PREFIX=$(pwd)/libsndfile-install
@@ -138,7 +142,7 @@ jobs:
           git clone --depth 1 https://github.com/libsndfile/libsndfile.git libsndfile-src
           cmake -S libsndfile-src -B libsndfile-build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DBUILD_SHARED_LIBS=OFF \
             -DENABLE_EXTERNAL_LIBS=OFF \
@@ -149,11 +153,13 @@ jobs:
           git clone --depth 1 --recurse-submodules https://github.com/dcherednik/atracdenc.git atracdenc-src
           cmake -S atracdenc-src -B atracdenc-build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
             -DCMAKE_PREFIX_PATH="$SNDFILE_PREFIX"
           cmake --build atracdenc-build --config Release
           BIN=$(find atracdenc-build -name "atracdenc" -not -name "*.cmake" -type f | head -1)
           cp "$BIN" dist/atracdenc
           chmod +x dist/atracdenc
+          lipo -archs dist/atracdenc | grep -qw arm64
 
       - name: Build atracdenc (Linux)
         if: matrix.platform == 'linux-x86_64'
