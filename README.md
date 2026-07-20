@@ -64,6 +64,12 @@ cargo install --path .
 
 Requires Rust 1.75 or later. Cross-platform: macOS, Linux, Windows. Automated macOS release archives target Apple Silicon.
 
+Windows release binaries are built by the manual **Windows Build** GitHub
+Actions workflow as unsigned `bbt-windows-x86_64-unsigned.zip` artifacts. Sign
+`bbt.exe`, `ffmpeg.exe`, `ffprobe.exe`, and `atracdenc.exe` locally on Windows
+with your Authenticode certificate, then upload the signed archive manually to
+the GitHub Release.
+
 ---
 
 ## Quick start

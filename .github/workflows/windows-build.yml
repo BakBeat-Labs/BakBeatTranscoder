@@ -1,0 +1,103 @@
+name: Windows Build
+
+# Manual trigger only. Produces an unsigned Windows archive that can be
+# downloaded, Authenticode-signed on a Windows machine, and uploaded manually
+# to a GitHub Release.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build unsigned Windows x86_64 archive
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            target\
+          key: windows-x86_64-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: windows-x86_64-cargo-
+
+      - name: Build bbt
+        shell: pwsh
+        run: |
+          cargo build --release
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\release\bbt.exe dist\bbt.exe
+
+      - name: Bundle FFmpeg and ffprobe
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            "User-Agent" = "BakBeatTranscoder"
+          }
+          $releases = Invoke-RestMethod `
+            -Headers $headers `
+            -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases"
+          $asset = $releases[0].assets |
+            Where-Object { $_.name -match "win64-lgpl\.zip$" } |
+            Select-Object -First 1
+          if (-not $asset) {
+            throw "No win64 LGPL static zip asset found in latest BtbN release"
+          }
+          Write-Host "Downloading: $($asset.browser_download_url)"
+          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile ffmpeg-windows.zip
+          Expand-Archive ffmpeg-windows.zip -DestinationPath ffmpeg-windows
+          $ffmpegRoot = Get-ChildItem ffmpeg-windows -Directory | Select-Object -First 1
+          Copy-Item "$($ffmpegRoot.FullName)\bin\ffmpeg.exe" dist\ffmpeg.exe
+          Copy-Item "$($ffmpegRoot.FullName)\bin\ffprobe.exe" dist\ffprobe.exe
+
+      - name: Install libsndfile
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libsndfile:x64-windows-static
+
+      - name: Build atracdenc
+        shell: pwsh
+        run: |
+          git clone --depth 1 --recurse-submodules https://github.com/dcherednik/atracdenc.git atracdenc-src
+          cmake -S atracdenc-src -B atracdenc-build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+          cmake --build atracdenc-build --config Release
+          $bin = Get-ChildItem atracdenc-build -Recurse -Filter atracdenc.exe |
+            Where-Object { $_.FullName -notmatch "\\CMakeFiles\\" } |
+            Select-Object -First 1
+          if (-not $bin) {
+            throw "atracdenc.exe was not produced"
+          }
+          Copy-Item $bin.FullName dist\atracdenc.exe
+
+      - name: Bundle license files
+        shell: pwsh
+        run: |
+          Copy-Item LICENSE dist\LICENSE
+          Copy-Item THIRD-PARTY-LICENSES dist\THIRD-PARTY-LICENSES
+
+      - name: Package unsigned archive
+        shell: pwsh
+        run: |
+          Get-ChildItem dist | Format-Table Name, Length
+          Compress-Archive -Path dist\* -DestinationPath bbt-windows-x86_64-unsigned.zip -Force
+
+      - name: Upload unsigned Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64-unsigned
+          path: bbt-windows-x86_64-unsigned.zip
+          retention-days: 7
