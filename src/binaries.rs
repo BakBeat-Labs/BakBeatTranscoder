@@ -48,11 +48,19 @@ pub fn find_atracdenc() -> Option<PathBuf> {
         .or_else(|| find_tool("atracenc", "BBT_ATRACENC_PATH"))
 }
 
+/// Locate the `bbt-wmv9` helper — the Windows-only WMV9 encoder that drives the
+/// OS Media Foundation encoder (see src/adapters/wmv9.rs). Absent on macOS/Linux
+/// by design: real WMV9 encoding only exists on Windows.
+pub fn find_wmv9_helper() -> Option<PathBuf> {
+    find_tool("bbt-wmv9", "BBT_WMV9_PATH")
+}
+
 /// Resolved paths for all external tools. Used by `bbt check`.
 pub struct BinaryPaths {
     pub ffmpeg: Option<PathBuf>,
     pub ffprobe: Option<PathBuf>,
     pub atracdenc: Option<PathBuf>,
+    pub wmv9: Option<PathBuf>,
 }
 
 impl BinaryPaths {
@@ -61,6 +69,7 @@ impl BinaryPaths {
             ffmpeg: find_ffmpeg(),
             ffprobe: find_ffprobe(),
             atracdenc: find_atracdenc(),
+            wmv9: find_wmv9_helper(),
         }
     }
 }

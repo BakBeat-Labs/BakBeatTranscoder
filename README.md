@@ -36,6 +36,7 @@ The manifest is the ground truth record of what was produced. You can re-verify 
 
 - [FFmpeg](https://ffmpeg.org) — required for most transcoding (MP3, AAC, FLAC, OGG, Opus, ALAC, WAV, WMA, video). ffprobe ships with it and handles video probing.
 - [atracdenc](https://github.com/dcherednik/atracdenc) — required for MiniDisc ATRAC encoding (SP, LP2, LP4).
+- `bbt-wmv9` — bundled in the **Windows** release only; required for WMV9 video (see [WMV9 support](#wmv9-support-windows-only)). Built from this repository (`helpers/bbt-wmv9`).
 
 Install these via your package manager, or drop the binaries in the same directory as `bbt` and they will be found automatically.
 
@@ -45,6 +46,7 @@ Install these via your package manager, or drop the binaries in the same directo
 export BBT_FFMPEG_PATH=/path/to/ffmpeg
 export BBT_FFPROBE_PATH=/path/to/ffprobe
 export BBT_ATRACDENC_PATH=/path/to/atracdenc
+export BBT_WMV9_PATH=/path/to/bbt-wmv9   # Windows only
 ```
 
 ---
@@ -313,6 +315,46 @@ notes       = "H.264 Baseline Level 3.0, 640x480 max for 5th gen iPod."
 ```
 
 Omitting `width`, `height`, or `frame_rate` preserves the source file's values.
+
+---
+
+## WMV9 support (Windows only)
+
+Some legacy devices — notably the **Sony NWZ-E370 series Walkman** — accept
+**WMV9 video only** (no H.264 or MPEG-4) and reject anything that isn't true
+WMV9 Main Profile. This is a hard problem: FFmpeg can *decode* WMV9/VC-1 but can
+only *encode* WMV7 and WMV8, because Microsoft never released the WMV9 encoder
+spec. There is no cross-platform open-source WMV9 encoder.
+
+The only encoder that produces real WMV9 is Microsoft's own, which ships built
+into every version of Windows as a Media Foundation Transform. `bbt` drives it
+through a small bundled helper, **`bbt-wmv9.exe`**, that redistributes nothing of
+Microsoft's — it just calls the encoder already present on the machine. Encoding
+runs in two stages: FFmpeg decodes, scales, and letterboxes the source to the
+target frame (raw NV12 + a PCM WAV), then `bbt-wmv9` encodes WMV9 + WMA and muxes
+to ASF/`.wmv`.
+
+Because that encoder exists only on Windows, **WMV9 output is Windows-only**:
+
+- On **Windows**, `bbt-wmv9.exe` is bundled alongside `bbt.exe` and used
+  automatically. Use the built-in `sony-walkman-nwz-e370-wmv9` profile, or set
+  `video_codec = "wmv9"` in your own profile.
+- On **macOS/Linux**, a WMV9 job fails at the resolve stage with a clear
+  "requires the Windows build" message — no partial run, no silent fallback to a
+  format the device would reject.
+
+```bash
+# On Windows: transcode video for a WMV9-only Walkman
+bbt transcode ./videos --profile sony-walkman-nwz-e370-wmv9 --out ./synced
+```
+
+**Determinism note.** `bbt`'s core guarantee is byte-identical output verified
+against a SHA-256 manifest. Microsoft's WMV9 encoder is not guaranteed to be
+bit-identical across Windows versions or CPUs, so for WMV9 outputs this guarantee
+is scoped: the manifest still records and re-verifies the hash that *was*
+produced (so `bbt verify` and `bbt resume` work as normal), but the same bytes
+are not promised across different machines the way they are for FFmpeg-encoded
+formats.
 
 ---
 

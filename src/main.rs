@@ -554,6 +554,7 @@ fn cmd_check(json: bool) -> Result<()> {
             "ffmpeg":    { "available": bins.ffmpeg.is_some(),   "path": bins.ffmpeg },
             "ffprobe":   { "available": bins.ffprobe.is_some(),  "path": bins.ffprobe },
             "atracdenc": { "available": bins.atracdenc.is_some(),"path": bins.atracdenc },
+            "bbt-wmv9":  { "available": bins.wmv9.is_some(),     "path": bins.wmv9 },
         });
         println!("{}", serde_json::to_string_pretty(&info)?);
     } else {
@@ -565,11 +566,12 @@ fn cmd_check(json: bool) -> Result<()> {
         show("ffmpeg",    &bins.ffmpeg);
         show("ffprobe",   &bins.ffprobe);
         show("atracdenc", &bins.atracdenc);
+        show("bbt-wmv9",  &bins.wmv9);
         println!("\nEncoder adapters:");
         for (name, adapter) in &caps.adapters {
             println!("  {name}: available ({})", adapter.supported_output_codecs().join(", "));
         }
-        for name in ["ffmpeg", "atrac"] {
+        for name in ["ffmpeg", "atrac", "wmv9"] {
             if !caps.adapters.contains_key(name) {
                 println!("  {name}: not available");
             }

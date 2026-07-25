@@ -1,0 +1,32 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+[package]
+name = "bbt-wmv9"
+version = "0.1.0"
+edition = "2021"
+description = "Windows-only WMV9 (Main Profile) encoder helper for bbt, driving the OS Media Foundation WMV9 encoder"
+license = "MPL-2.0"
+repository = "https://github.com/BakBeat/BakBeatTranscoder"
+rust-version = "1.75"
+
+[[bin]]
+name = "bbt-wmv9"
+path = "src/main.rs"
+
+# The Windows Media Foundation bindings only exist (and only link) on Windows.
+# On other platforms the crate still compiles — main() is a stub that errors —
+# so `cargo build --workspace` / metadata resolution never breaks the macOS or
+# Linux CI. Real functionality is gated behind cfg(windows).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_Audio",
+] }
+windows-core = "0.58"
+
+# The release profile is inherited from the workspace root Cargo.toml
+# (lto = true, codegen-units = 1, strip = true).

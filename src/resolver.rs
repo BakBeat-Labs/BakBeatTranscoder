@@ -14,9 +14,16 @@ use anyhow::Result;
 
 use crate::adapters::atrac::AtracAdapter;
 use crate::adapters::ffmpeg::FfmpegAdapter;
+use crate::adapters::wmv9::Wmv9Adapter;
 use crate::adapters::EncoderAdapter;
 use crate::error::BbtError;
+use crate::graph::{EncodeParams, MediaType};
 use crate::planner::PlannedJob;
+
+/// True when a job targets WMV9 video (routes to the Windows-only helper).
+fn is_wmv9_job(params: &EncodeParams) -> bool {
+    params.media_type == MediaType::Video && params.video_codec.as_deref() == Some("wmv9")
+}
 
 /// The set of encoder adapters available on this system.
 pub struct ResolvedCapabilities {
@@ -37,6 +44,13 @@ impl ResolvedCapabilities {
             adapters.insert("atrac".to_string(), Box::new(atrac));
         }
 
+        // WMV9 helper is Windows-only; absent elsewhere by design.
+        if let Some(wmv9) = Wmv9Adapter::detect() {
+            if wmv9.is_available() {
+                adapters.insert("wmv9".to_string(), Box::new(wmv9));
+            }
+        }
+
         Self { adapters }
     }
 
@@ -44,9 +58,9 @@ impl ResolvedCapabilities {
         self.adapters.contains_key(name)
     }
 
-    /// Find the best available adapter for a given output codec.
+    /// Find the best available adapter for a given audio output codec.
     /// ATRAC codecs route exclusively to the atrac adapter.
-    /// All other codecs route to ffmpeg.
+    /// All other audio codecs route to ffmpeg.
     pub fn adapter_for_codec(&self, codec: &str) -> Option<&str> {
         let preference: &[&str] = match codec {
             "atrac1" | "atrac3" | "atrac3p" => &["atrac"],
@@ -58,6 +72,21 @@ impl ResolvedCapabilities {
             }
         }
         None
+    }
+
+    /// Route a fully-resolved job to an adapter.
+    ///
+    /// Video jobs route on the *video* codec: WMV9 goes to the Windows-only
+    /// `wmv9` helper, all other video (and the embedded audio track) goes to
+    /// FFmpeg. Audio-only jobs route on the audio codec.
+    pub fn adapter_for_params(&self, params: &EncodeParams) -> Option<&str> {
+        if is_wmv9_job(params) {
+            return self.adapters.contains_key("wmv9").then_some("wmv9");
+        }
+        if params.media_type == MediaType::Video {
+            return self.adapters.contains_key("ffmpeg").then_some("ffmpeg");
+        }
+        self.adapter_for_codec(&params.audio_codec)
     }
 
     /// Validate that every job in the plan can be satisfied.
@@ -91,9 +120,24 @@ impl ResolvedCapabilities {
             );
         }
 
-        // Check each job individually for unresolvable codec
+        // WMV9 requires the Windows-only bbt-wmv9 helper. Give a targeted
+        // message instead of a generic "no adapter" error, since this is a
+        // platform limitation, not a missing install the user can fix on macOS.
+        let needs_wmv9 = jobs.iter().any(|j| is_wmv9_job(&j.params));
+        if needs_wmv9 && !self.has_adapter("wmv9") {
+            errors.push(
+                "WMV9 video encoding requires the Windows build of bbt (it uses \
+                 the OS Media Foundation encoder via the bundled bbt-wmv9 helper). \
+                 There is no cross-platform WMV9 encoder — FFmpeg can only encode \
+                 WMV7/WMV8, which these devices reject. Run this on Windows, or \
+                 set BBT_WMV9_PATH to a bbt-wmv9.exe build."
+                    .to_string(),
+            );
+        }
+
+        // Check each job individually for an unresolvable target.
         for job in jobs {
-            if self.adapter_for_codec(&job.params.audio_codec).is_none() {
+            if self.adapter_for_params(&job.params).is_none() && !is_wmv9_job(&job.params) {
                 errors.push(format!(
                     "no adapter can encode to codec '{}' (file: {})",
                     job.params.audio_codec,
@@ -112,9 +156,7 @@ impl ResolvedCapabilities {
     /// Assign an adapter name to each job. Call after validate_plan succeeds.
     pub fn assign_adapters(&self, jobs: &mut Vec<PlannedJob>) {
         for job in jobs {
-            job.assigned_adapter = self
-                .adapter_for_codec(&job.params.audio_codec)
-                .map(str::to_string);
+            job.assigned_adapter = self.adapter_for_params(&job.params).map(str::to_string);
         }
     }
 }

@@ -169,4 +169,8 @@ static BUILTIN_PROFILES: &[(&str, &str)] = &[
         "creative-zen-nano-plus-wma",
         include_str!("../profiles/creative-zen-nano-plus-wma.toml"),
     ),
+    (
+        "sony-walkman-nwz-e370-wmv9",
+        include_str!("../profiles/sony-walkman-nwz-e370-wmv9.toml"),
+    ),
 ];

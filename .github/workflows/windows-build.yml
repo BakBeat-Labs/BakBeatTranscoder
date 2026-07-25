@@ -36,6 +36,14 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target\release\bbt.exe dist\bbt.exe
 
+      - name: Build bbt-wmv9 helper
+        shell: pwsh
+        # WMV9 encoder helper. Drives the OS Media Foundation WMV9 encoder;
+        # links against Windows system libs only (no bundled Microsoft DLLs).
+        run: |
+          cargo build --release -p bbt-wmv9
+          Copy-Item target\release\bbt-wmv9.exe dist\bbt-wmv9.exe
+
       - name: Bundle FFmpeg and ffprobe
         shell: pwsh
         env:

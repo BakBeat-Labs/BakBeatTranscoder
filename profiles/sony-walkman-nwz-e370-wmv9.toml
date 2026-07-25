@@ -1,0 +1,26 @@
+id          = "sony-walkman-nwz-e370-wmv9"
+name        = "Sony Walkman NWZ-E370 (WMV9)"
+vendor      = "Sony"
+description = "WMV9 Main Profile video for the Sony NWZ-E370 series Walkman, which accepts WMV9 video only (no H.264/MPEG-4) with WMA audio, inside an ASF/.wmv container."
+media_type  = "video"
+container   = "asf"
+extension   = "wmv"
+
+# Audio track: WMA, 128 kbps CBR, 44.1 kHz stereo (device supports 32–192 kbps).
+audio_codec        = "wma"
+audio_bitrate_kbps = 128
+sample_rate_hz     = 44100
+channels           = 2
+
+# Video track: WMV9 (Main/Simple Profile — codec wmv3, NOT VC-1/Advanced).
+# Device envelope: max QQVGA 128×160, max 768 kbps, max 30 fps. 128×96 is the
+# safe 4:3 landscape frame that fits inside the 128×160 panel; the encoder
+# letterboxes the source to it. frame_rate is left unset to preserve the source
+# rate — ensure sources are ≤30 fps.
+video_codec        = "wmv9"
+video_bitrate_kbps = 700
+width              = 128
+height             = 96
+
+cbr       = true
+notes     = "WMV9 encoding is Windows-only: FFmpeg cannot encode WMV9, and the NWZ-E370 firmware rejects WMV8. bbt drives the OS Media Foundation WMV9 encoder via the bundled bbt-wmv9.exe helper. See README (WMV9 support)."

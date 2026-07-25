@@ -7,6 +7,13 @@ license = "MPL-2.0"
 repository = "https://github.com/BakBeat/BakBeatTranscoder"
 rust-version = "1.75"
 
+# The root package `bbt` is the workspace root. `bbt-wmv9` is a Windows-only
+# helper binary (Media Foundation WMV9 encoder) — it is NOT built by the default
+# `cargo build` here; the Windows CI builds it explicitly with `-p bbt-wmv9`.
+# See helpers/bbt-wmv9 and src/adapters/wmv9.rs.
+[workspace]
+members = ["helpers/bbt-wmv9"]
+
 [[bin]]
 name = "bbt"
 path = "src/main.rs"

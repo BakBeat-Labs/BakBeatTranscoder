@@ -8,6 +8,7 @@
 
 pub mod atrac;
 pub mod ffmpeg;
+pub mod wmv9;
 
 use std::path::PathBuf;
 
