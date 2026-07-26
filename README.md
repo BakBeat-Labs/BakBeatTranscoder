@@ -39,6 +39,38 @@ The manifest is the ground truth record of what was produced. You can re-verify 
 
 Install these via your package manager, or drop the binaries in the same directory as `bbt` and they will be found automatically.
 
+### Bundled FFmpeg builds and WMA Lossless
+
+BakBeat release archives should be treated as the product runtime for external
+tools. When validating device-specific behavior, use the exact `ffmpeg` and
+`ffprobe` binaries packaged with the release instead of assuming Homebrew,
+system packages, or distro FFmpeg builds behave the same way.
+
+WMA Lossless (`wmalossless`, ASF/WMA, codec tag `0x0163`) is not available in
+upstream FFmpeg builds at the time this note was written. Standard FFmpeg can
+usually decode WMA Lossless and encode lossy WMA (`wmav1`/`wmav2`), but it does
+not provide a WMA Lossless encoder.
+
+For Zune HD lossless output, the release toolchain will need a pinned FFmpeg
+build that includes the native WMA Lossless encoder work from:
+
+```text
+https://github.com/magicisinthehole/FFmpeg-with-WMA-Lossless-Enc/tree/wma-lossless-encoder
+```
+
+That fork must be carried as an explicit bundled-tool dependency: pin the exact
+commit, record the FFmpeg configure flags used for each platform archive, ship
+matching `ffmpeg`/`ffprobe` binaries, and keep the corresponding source and
+license notices available with the release. BBT should expose this as a
+distinct `wmalossless` capability rather than overloading `wma`, which currently
+means lossy WMA through `wmav2`.
+
+Before enabling a Zune HD profile, verify round-trip losslessness and playback
+on the actual packaged binaries and hardware. Pay special attention to the Zune
+HD's documented limit of two channels, 48 kHz, and up to 768 kbps; the encoder
+may report nominal stream metadata differently from the actual ASF file bitrate,
+so hardware behavior is the source of truth.
+
 **Overriding binary paths** — if you need to point at a specific installation:
 
 ```bash

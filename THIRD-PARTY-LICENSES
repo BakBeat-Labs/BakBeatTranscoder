@@ -22,6 +22,13 @@ Source:   https://ffmpeg.org  /  https://git.ffmpeg.org/ffmpeg.git
 macOS arm64 tools source: https://github.com/kiimelon/FFmpeg-arm-silicon
 Copyright © 2000–present the FFmpeg developers
 
+Some BakBeat Transcoder releases may ship a pinned FFmpeg build carrying a
+native WMA Lossless encoder that has not been accepted upstream. When such a
+build is included, the release notes and bundled `ffmpeg -version` output must
+identify the exact source repository, commit, and configure flags used. The
+initial candidate source for that capability is:
+  https://github.com/magicisinthehole/FFmpeg-with-WMA-Lossless-Enc/tree/wma-lossless-encoder
+
 The full text of the LGPL 2.1 is available at:
   https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
 
