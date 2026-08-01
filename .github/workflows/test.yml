@@ -80,7 +80,7 @@ jobs:
       # Static builds only — dynamically linked binaries won't work on end-user machines.
       # Sources: BakBeat-Labs' fork of kiimelon's Apple Silicon build (macOS,
       # built from source — the prebuilt kiimelon release lacks libxvid,
-      # which the GPX MT861B profile requires), BtbN LGPL essentials (Linux).
+      # which the GPX MT861B target requires), BtbN LGPL essentials (Linux).
 
       - name: Bundle FFmpeg (macOS)
         if: matrix.platform == 'macos-arm64'
@@ -90,7 +90,33 @@ jobs:
           git clone --depth 1 --branch add-libxvid \
             https://github.com/BakBeat-Labs/FFmpeg-arm-silicon.git \
             ffmpeg-arm-silicon
-          (cd ffmpeg-arm-silicon && bash scripts/build-all-static.sh)
+          mkdir -p ci-bin
+          cat > ci-bin/install <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          filtered=()
+          skipped_shared=false
+          kept_xvid_static=false
+          for arg in "$@"; do
+            case "$arg" in
+              *libxvidcore*.dylib)
+                echo "[bbt] suppressing Xvid shared-library install argument: $arg" >&2
+                skipped_shared=true
+                ;;
+              *libxvidcore*.a)
+                filtered+=("$arg")
+                kept_xvid_static=true
+                ;;
+              *) filtered+=("$arg") ;;
+            esac
+          done
+          if [ "$skipped_shared" = true ] && [ "$kept_xvid_static" = false ]; then
+            exit 0
+          fi
+          exec /usr/bin/install "${filtered[@]}"
+          EOF
+          chmod +x ci-bin/install
+          (cd ffmpeg-arm-silicon && PATH="$GITHUB_WORKSPACE/ci-bin:$PATH" bash scripts/build-all-static.sh)
 
           cp ffmpeg-arm-silicon/local-static/bin/ffmpeg dist/ffmpeg
           cp ffmpeg-arm-silicon/local-static/bin/ffprobe dist/ffprobe
@@ -98,6 +124,7 @@ jobs:
           lipo -archs dist/ffmpeg | grep -qw arm64
           lipo -archs dist/ffprobe | grep -qw arm64
           dist/ffmpeg -hide_banner -encoders | grep -qw libxvid
+          ! otool -L dist/ffmpeg | grep -q libxvidcore
 
       - name: Bundle FFmpeg (Linux)
         if: matrix.platform == 'linux-x86_64'
