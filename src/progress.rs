@@ -150,7 +150,11 @@ impl Emitter {
 
     fn render_human(&mut self, event: Event) {
         match event {
-            Event::PhaseStart { phase, total, carrying_forward } => {
+            Event::PhaseStart {
+                phase,
+                total,
+                carrying_forward,
+            } => {
                 if let Some(bar) = self.bar.take() {
                     bar.finish_and_clear();
                 }
@@ -198,7 +202,9 @@ impl Emitter {
                 _ => {}
             },
 
-            Event::FileFailed { phase, file, error, .. } => {
+            Event::FileFailed {
+                phase, file, error, ..
+            } => {
                 match phase {
                     Phase::Encode => {
                         if let Some(bar) = &self.bar {
@@ -216,7 +222,14 @@ impl Emitter {
                 }
             }
 
-            Event::PhaseComplete { phase, jobs, skipped, success, failed, .. } => {
+            Event::PhaseComplete {
+                phase,
+                jobs,
+                skipped,
+                success,
+                failed,
+                ..
+            } => {
                 if let Some(bar) = self.bar.take() {
                     bar.finish_and_clear();
                 }
@@ -227,8 +240,11 @@ impl Emitter {
                         let s = skipped.unwrap_or(0);
                         eprintln!(
                             " {j} to transcode{}",
-                            if s > 0 { format!(", {s} already in target format") }
-                            else { String::new() }
+                            if s > 0 {
+                                format!(", {s} already in target format")
+                            } else {
+                                String::new()
+                            }
                         );
                     }
                     Phase::Resolve => eprintln!(" ok"),
@@ -250,7 +266,14 @@ impl Emitter {
                 eprintln!("\n  operation failed{where_}: {error}");
             }
 
-            Event::Complete { success, failed, total_elapsed_ms, manifest, carried_forward, re_encoded } => {
+            Event::Complete {
+                success,
+                failed,
+                total_elapsed_ms,
+                manifest,
+                carried_forward,
+                re_encoded,
+            } => {
                 if let Some(bar) = self.bar.take() {
                     bar.finish_and_clear();
                 }

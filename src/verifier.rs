@@ -56,9 +56,7 @@ pub enum ArtifactStatus {
     /// Freshly encoded this run.
     Success,
     /// Verified intact from a previous run; not re-encoded.
-    CarriedForward {
-        from_manifest_id: Uuid,
-    },
+    CarriedForward { from_manifest_id: Uuid },
     /// Encode failed.
     Failed { error: String },
     /// Intentionally skipped (e.g. already in target format).
@@ -159,14 +157,12 @@ impl TranscodeManifest {
             .iter()
             .map(|record| {
                 let status = match &record.status {
-                    ArtifactStatus::Failed { error } => {
-                        VerificationStatus::OriginallyFailed { error: error.clone() }
-                    }
-                    ArtifactStatus::Skipped { .. } => {
-                        VerificationStatus::OriginallyFailed {
-                            error: "skipped".to_string(),
-                        }
-                    }
+                    ArtifactStatus::Failed { error } => VerificationStatus::OriginallyFailed {
+                        error: error.clone(),
+                    },
+                    ArtifactStatus::Skipped { .. } => VerificationStatus::OriginallyFailed {
+                        error: "skipped".to_string(),
+                    },
                     ArtifactStatus::CarriedForward { .. } => {
                         // Re-verify the file is still intact
                         match check_artifact_integrity(record) {

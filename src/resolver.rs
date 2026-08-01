@@ -68,10 +68,16 @@ impl ResolvedCapabilities {
 
         // Check that at least ffmpeg is present for any non-ATRAC job
         let needs_ffmpeg = jobs.iter().any(|j| {
-            !matches!(j.params.audio_codec.as_str(), "atrac1" | "atrac3" | "atrac3p")
+            !matches!(
+                j.params.audio_codec.as_str(),
+                "atrac1" | "atrac3" | "atrac3p"
+            )
         });
         let needs_atrac = jobs.iter().any(|j| {
-            matches!(j.params.audio_codec.as_str(), "atrac1" | "atrac3" | "atrac3p")
+            matches!(
+                j.params.audio_codec.as_str(),
+                "atrac1" | "atrac3" | "atrac3p"
+            )
         });
 
         if needs_ffmpeg && !self.has_adapter("ffmpeg") {
@@ -160,6 +166,7 @@ mod tests {
                 audio_bitrate_kbps: Some(64),
                 sample_rate_hz: 44100,
                 channels: 2,
+                preserve_artwork: true,
                 video_codec: Some("xvid".to_string()),
                 video_bitrate_kbps: Some(256),
                 width: Some(320),
@@ -184,9 +191,7 @@ mod tests {
     #[test]
     fn xvid_target_blocked_when_ffmpeg_lacks_libxvid() {
         let capabilities = capabilities_with_ffmpeg(false);
-        let err = capabilities
-            .validate_plan(&[gpx_mt861b_job()])
-            .unwrap_err();
+        let err = capabilities.validate_plan(&[gpx_mt861b_job()]).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Bundled ffmpeg does not provide a libxvid encoder yet."),
@@ -205,9 +210,7 @@ mod tests {
         let capabilities = ResolvedCapabilities {
             adapters: HashMap::new(),
         };
-        let err = capabilities
-            .validate_plan(&[gpx_mt861b_job()])
-            .unwrap_err();
+        let err = capabilities.validate_plan(&[gpx_mt861b_job()]).unwrap_err();
         // Missing ffmpeg produces both the generic "ffmpeg is required" error
         // and the video-codec-specific one; just assert the batch fails.
         assert!(err.to_string().contains("no adapter can encode video"));

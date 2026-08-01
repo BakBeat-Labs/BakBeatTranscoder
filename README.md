@@ -1,536 +1,149 @@
 # BakBeat Transcoder
 
-Deterministic audio and video transcoder for device sync. Part of the [BakBeat](https://bakbeat.com) ecosystem, open source under MPL-2.0.
+`bbt` is BakBeat's structured media transcoder. It is public for licensing and
+third-party-tool boundary reasons, but it is designed as a BakBeat runtime
+component, not as a general end-user transcoding product.
 
-The core guarantee: identical inputs with identical parameters always produce identical outputs. Every run is fully planned before any encoding starts, and every output is verified against a SHA-256 manifest.
-
----
-
-## How it works
-
-Transcoding runs through five phases in order:
-
-```
-probe → plan → resolve → encode → verify
-```
-
-**Probe** — each input file is inspected natively (Symphonia for audio, ffprobe for video). Format, codec, sample rate, resolution, and metadata are read without touching the file.
-
-**Plan** — inputs are matched against the target profile. Files already in the correct format are skipped. Everything else gets a fully resolved job: all encoding parameters explicit, output paths determined.
-
-**Resolve** — the system checks that every required encoder backend is available before any work begins. If anything is missing, the entire batch fails here — no partial runs.
-
-**Encode** — jobs execute sequentially. Each produces an artifact with its SHA-256 hash recorded.
-
-**Verify** — every output is checked against its recorded hash. The result is written to a manifest JSON file.
-
-The manifest is the ground truth record of what was produced. You can re-verify it at any time with `bbt verify`, and re-run any failures with `bbt resume`.
-
----
-
-## Prerequisites
-
-**If you're using BakBeat:** no action needed. BakBeat manages `bbt` and its dependencies for you.
-
-**If you're using `bbt` standalone**, the platform releases from this repository include FFmpeg, ffprobe, and atracdenc bundled alongside the `bbt` binary — just download the release for your platform and everything works. Alternatively:
-
-- [FFmpeg](https://ffmpeg.org) — required for most transcoding (MP3, AAC, FLAC, OGG, Opus, ALAC, WAV, WMA, video). ffprobe ships with it and handles video probing.
-- [atracdenc](https://github.com/dcherednik/atracdenc) — required for MiniDisc ATRAC encoding (SP, LP2, LP4).
-
-Install these via your package manager, or drop the binaries in the same directory as `bbt` and they will be found automatically.
-
-### Bundled FFmpeg builds and WMA Lossless
-
-BakBeat release archives should be treated as the product runtime for external
-tools. When validating device-specific behavior, use the exact `ffmpeg` and
-`ffprobe` binaries packaged with the release instead of assuming Homebrew,
-system packages, or distro FFmpeg builds behave the same way.
-
-WMA Lossless (`wmalossless`, ASF/WMA, codec tag `0x0163`) is not available in
-upstream FFmpeg builds at the time this note was written. Standard FFmpeg can
-usually decode WMA Lossless and encode lossy WMA (`wmav1`/`wmav2`), but it does
-not provide a WMA Lossless encoder.
-
-For Zune HD lossless output, the release toolchain will need a pinned FFmpeg
-build that includes the native WMA Lossless encoder work from:
+BakBeat owns device policy. `bbt` owns execution:
 
 ```text
-https://github.com/magicisinthehole/FFmpeg-with-WMA-Lossless-Enc/tree/wma-lossless-encoder
+BakBeat decides device, policy, format, destination, and user intent.
+bbt receives a concrete requested artifact spec.
+bbt selects the required adapter, runs it, and reports structured phases/errors.
 ```
 
-That fork must be carried as an explicit bundled-tool dependency: pin the exact
-commit, record the FFmpeg configure flags used for each platform archive, ship
-matching `ffmpeg`/`ffprobe` binaries, and keep the corresponding source and
-license notices available with the release. BBT should expose this as a
-distinct `wmalossless` capability rather than overloading `wma`, which currently
-means lossy WMA through `wmav2`.
+## Contract
 
-Before enabling a Zune HD profile, verify round-trip losslessness and playback
-on the actual packaged binaries and hardware. Pay special attention to the Zune
-HD's documented limit of two channels, 48 kHz, and up to 768 kbps; the encoder
-may report nominal stream metadata differently from the actual ASF file bitrate,
-so hardware behavior is the source of truth.
+`bbt` should answer one question:
 
-**Overriding binary paths** — if you need to point at a specific installation:
+> Given this input and this exact requested output shape, can you produce it?
+
+It should not decide which device profile applies, which optimization policy is
+appropriate, where device files belong, or whether a user wanted a conversion.
+Those decisions belong in BakBeat.
+
+## Basic Usage
+
+Audio:
 
 ```bash
-export BBT_FFMPEG_PATH=/path/to/ffmpeg
-export BBT_FFPROBE_PATH=/path/to/ffprobe
-export BBT_ATRACDENC_PATH=/path/to/atracdenc
+bbt transcode "track.flac" \
+  --codec mp3 \
+  --container mp3 \
+  --extension mp3 \
+  --bitrate 128 \
+  --sample-rate 44100 \
+  --channels 2 \
+  --output ./out \
+  --json
 ```
 
----
-
-## Building
+Video:
 
 ```bash
-# Clone and build
-git clone https://github.com/BakBeat/BakBeatTranscoder
-cd BakBeatTranscoder
-cargo build --release
-
-# The binary is at target/release/bbt
-# Optionally install it
-cargo install --path .
+bbt transcode "movie.mov" \
+  --media video \
+  --codec aac \
+  --bitrate 128 \
+  --video-codec h264 \
+  --video-bitrate 768 \
+  --width 480 \
+  --height 272 \
+  --container mp4 \
+  --extension m4v \
+  --output ./out \
+  --json
 ```
 
-Requires Rust 1.75 or later. Cross-platform: macOS, Linux, Windows. Automated macOS release archives target Apple Silicon.
-
-Windows release binaries are built by the manual **Windows Build** GitHub
-Actions workflow as unsigned `bbt-windows-x86_64-unsigned.zip` artifacts. Sign
-`bbt.exe`, `ffmpeg.exe`, `ffprobe.exe`, and `atracdenc.exe` locally on Windows
-with your Authenticode certificate, then upload the signed archive manually to
-the GitHub Release.
-
----
-
-## Quick start
+Audio-only output, with cover art and side streams stripped by `bbt` instead of
+by a caller-side `ffmpeg` remux:
 
 ```bash
-# Transcode a folder of FLAC files to MP3 320 kbps
-bbt transcode ~/Music/Artist/ --profile generic-mp3-320 --output ~/Transcoded/
-
-# Transcode for MiniDisc LP2
-bbt transcode ~/Music/ --profile minidisc-lp2 --output ~/ForMinidisc/
-
-# Transcode for a Creative Zen Nano Plus or similar WMA-era player
-bbt transcode ~/Music/ --profile creative-zen-nano-plus-wma --output ~/ForZenNano/
-
-# Specify format manually without a profile
-bbt transcode track.flac --codec mp3 --bitrate 192 --output ./out/
-
-# Manual WMA: ASF container, .wma extension
-bbt transcode track.mp3 --codec wma --container asf --extension wma --bitrate 128 --output ./out/
-
-# Probe a file to see its format and metadata
-bbt probe track.flac
-bbt probe video.mp4
-
-# Check what encoder backends are available
-bbt check
-
-# List available device profiles
-bbt profiles
-bbt profiles --detail
+bbt transcode "track.m4a" \
+  --codec aac \
+  --container m4a \
+  --extension m4a \
+  --audio-only \
+  --output ./out \
+  --json
 ```
-
----
 
 ## Commands
 
 ### `bbt transcode`
 
-The main command. Runs all five phases in sequence and writes a `manifest.json` to the output directory.
+Runs the full execution path:
 
-```bash
-bbt transcode <inputs...> --profile <id> --output <dir>
-bbt transcode <inputs...> --codec <codec> [--container <fmt>] [--bitrate <kbps>] --output <dir>
+```text
+probe -> plan -> resolve -> encode -> complete
 ```
 
-| Flag | Description |
-|---|---|
-| `--profile <id>` | Use a built-in or custom device profile |
-| `--codec <codec>` | Audio codec: `mp3`, `aac`, `flac`, `vorbis`, `opus`, `alac`, `wma`, `atrac3` |
-| `--container <fmt>` | Container format. Defaults to codec value. |
-| `--extension <ext>` | Output file extension. Defaults to container. |
-| `--bitrate <kbps>` | Audio bitrate in kbps |
-| `--sample-rate <hz>` | Output sample rate. Defaults to source. |
-| `--channels <n>` | Output channels. Defaults to source. |
-| `--cbr` | Force constant bitrate (default: true) |
-| `--output <dir>` | Output directory (default: `./transcoded`) |
-| `--source-root <dir>` | Root for computing relative output paths |
-| `--manifest <file>` | Where to save the manifest (default: `<output>/manifest.json`) |
-| `--stop-on-error` | Abort the entire batch on the first failure |
-| `--no-skip` | Always encode every input to the requested spec — disable the "already in target format" check (see below) |
-| `--json` | Emit NDJSON progress events to stdout (see [JSON output](#json-output)) |
+The plan step is internal plumbing: it resolves caller-supplied specs against
+source facts, such as preserving source sample rate/channels when the caller did
+not supply them. It is not device-profile selection.
 
-### Caller-authoritative encoding (`--no-skip`)
+Useful flags:
 
-By default, `bbt transcode` skips inputs whose codec and container already
-match the target — useful for batch library scans where you don't want to
-needlessly re-encode files that are already in the right format.
-
-But that check only compares **codec + container**, not bitrate, mode, or
-sample rate. If you've already decided an encode is required — e.g.
-re-rating a 320 kbps MP3 down to 128 kbps, where the codec doesn't change —
-the default skip check fires incorrectly and `bbt transcode` exits 0 having
-written nothing.
-
-Pass `--no-skip` when you are the planner and bbt should simply execute:
-
-```bash
-bbt transcode "track.mp3" --codec mp3 --bitrate 128 --output ./out/ --no-skip
-```
-
-With `--no-skip`, every input becomes exactly one encode job — bbt does not
-re-evaluate whether the encode is "necessary". If no job can be planned for
-an input under `--no-skip` (e.g. nothing decodable was found), bbt exits
-non-zero rather than silently producing an empty output directory.
-
-Relative directory structure is preserved. If you transcode `Music/Artist/Album/track.flac` with `--source-root Music/` and `--output Transcoded/`, the output is `Transcoded/Artist/Album/track.mp3`.
-
----
-
-### `bbt plan`
-
-Build an execution graph without encoding. Saves a `graph.json` you can inspect or pass to `bbt execute` later.
-
-```bash
-bbt plan ~/Music/ --profile generic-mp3-320 --output ~/Out/ --graph-out plan.json
-```
-
-The graph JSON contains every input file's SHA-256, all resolved encoding parameters, and the graph's own hash. If any parameter changes, the hash changes.
-
----
-
-### `bbt execute`
-
-Run a previously generated graph.
-
-```bash
-bbt execute plan.json --manifest manifest.json
-```
-
-Re-validates encoder availability before starting. Warns if the graph hash has changed since it was created.
-
----
-
-### `bbt resume`
-
-Re-run a previous operation, skipping files that are still intact.
-
-```bash
-bbt resume manifest.json
-```
-
-For each artifact in the manifest:
-- If the output file exists and its SHA-256 still matches → **carried forward**, not re-encoded
-- If the file is missing, failed, or the hash has drifted → **re-encoded**
-
-Produces a new manifest with `resumed_from` set to the original manifest's ID, creating an audit chain.
-
----
-
-### `bbt verify`
-
-Check all artifacts in a manifest against their recorded SHA-256 hashes.
-
-```bash
-bbt verify manifest.json
-```
-
-Exits with code 2 if any artifact is missing, size-mismatched, or hash-mismatched.
-
----
+| Flag | Meaning |
+| --- | --- |
+| `--media audio\|video` | Requested media kind. Defaults to `audio`. |
+| `--codec <codec>` | Requested audio codec. |
+| `--container <container>` | Requested output container. Defaults to `--codec`. |
+| `--extension <extension>` | Requested file extension. Defaults to container. |
+| `--bitrate <kbps>` | Requested audio bitrate. |
+| `--sample-rate <hz>` | Requested audio sample rate. Omit to preserve source when available. |
+| `--channels <count>` | Requested channel count. Omit to preserve source when available. |
+| `--video-codec <codec>` | Requested video codec. Required with `--media video`. |
+| `--video-bitrate <kbps>` | Requested video bitrate. |
+| `--width <px>` / `--height <px>` | Requested video dimensions. Omit to preserve source when available. |
+| `--frame-rate <fps>` | Requested frame rate. Omit to preserve source when available. |
+| `--pixel-format <fmt>` | Adapter pixel format, such as `yuv420p`. |
+| `--audio-only` | Strip artwork/video/subtitle/data side streams from audio outputs. |
+| `--no-skip` | Force an encode even if codec/container already match. |
+| `--json` | Emit NDJSON progress events on stdout. |
 
 ### `bbt probe`
 
-Inspect a media file. Uses Symphonia for audio (in-process) and ffprobe for video.
+Inspects media and prints source facts. Audio probing is native via Symphonia;
+video probing uses `ffprobe` as a subprocess.
 
 ```bash
-bbt probe track.flac
-bbt probe video.mp4
-bbt probe track.flac --json
+bbt probe "track.flac" --json
+bbt probe "movie.mp4" --json
 ```
-
----
-
-### `bbt profiles`
-
-List available device profiles.
-
-```bash
-bbt profiles              # summary list
-bbt profiles --detail     # full parameters for each profile
-bbt profiles minidisc     # filter by ID prefix
-```
-
----
 
 ### `bbt check`
 
-Report which encoder backends are available on this system.
+Reports which execution adapters and external tools are available.
 
 ```bash
-bbt check
 bbt check --json
 ```
 
----
+`plan`, `execute`, `verify`, and `resume` remain available as low-level internal
+tooling around the execution graph/manifest machinery. They are not intended to
+be BakBeat's device-policy interface.
 
-## Device profiles
+## Structured Output
 
-Profiles are TOML files that declare what format, codec, and parameters a target device requires. Built-in profiles cover common devices; you can also supply your own.
-
-### Built-in profiles
-
-| ID | Format | Use case |
-|---|---|---|
-| `minidisc-sp` | ATRAC1 ~292 kbps | MiniDisc Standard Play |
-| `minidisc-lp2` | ATRAC3 132 kbps | MiniDisc LP2 (2× time) |
-| `minidisc-lp4` | ATRAC3 66 kbps | MiniDisc LP4 (4× time) |
-| `himd-sp` | ATRAC3+ 256 kbps | HiMD Standard Play |
-| `generic-mp3-128` | MP3 128 kbps CBR | Maximum device compatibility |
-| `generic-mp3-192` | MP3 192 kbps CBR | Good balance of quality and size |
-| `generic-mp3-320` | MP3 320 kbps CBR | Maximum MP3 quality |
-| `generic-aac-128` | AAC-LC 128 kbps | iOS, Android, modern players |
-| `generic-aac-256` | AAC-LC 256 kbps | Transparent AAC quality |
-| `generic-flac` | FLAC lossless | Archival or lossless-capable devices |
-| `generic-ogg-192` | Vorbis 192 kbps CBR | Rockbox and Ogg-capable players |
-| `creative-zen-nano-plus-wma` | WMA 128 kbps CBR | Creative Zen Nano Plus and similar WMA-era flash players |
-
-### Writing a custom profile
-
-Create a `.toml` file and pass its directory with `--profile-dir`:
-
-```toml
-# profiles/my-player.toml
-id          = "my-player"
-name        = "My MP3 Player"
-description = "Cheap MP3 player that only accepts 128 kbps CBR MP3"
-container   = "mp3"
-audio_codec = "mp3"
-audio_bitrate_kbps = 128
-sample_rate_hz = 44100   # omit to preserve source sample rate
-channels    = 2          # omit to preserve source channels
-cbr         = true
-extension   = "mp3"
-```
-
-```bash
-bbt transcode ~/Music/ --profile my-player --profile-dir ./profiles/ --output ~/Out/
-```
-
-### Video profile example
-
-```toml
-# profiles/ipod-video.toml
-id          = "ipod-video-5g"
-name        = "iPod 5th Generation Video"
-vendor      = "Apple"
-media_type  = "video"
-container   = "mp4"
-video_codec = "h264"
-video_bitrate_kbps = 1500
-width       = 640
-height      = 480
-pixel_format = "yuv420p"
-audio_codec = "aac"
-audio_bitrate_kbps = 128
-sample_rate_hz = 44100
-channels    = 2
-cbr         = true
-extension   = "mp4"
-notes       = "H.264 Baseline Level 3.0, 640x480 max for 5th gen iPod."
-```
-
-Omitting `width`, `height`, or `frame_rate` preserves the source file's values.
-
----
-
-## Metadata and cover art preservation
-
-By default, every transcode carries forward the source's portable tags and
-embedded cover art — no flags required.
-
-- **Tags** — bbt maps all source metadata into the output (`-map_metadata 0`).
-  Standard fields (artist, album, album_artist, title, track, disc, genre,
-  date, composer, comment, ISRC, etc.) and vendor/custom fields all pass
-  through; bbt never invents or rewrites semantic fields from heuristics.
-- **Embedded cover art** — FLAC PICTURE blocks, MP4 `covr`/`attached_pic`,
-  and ID3 APIC images all surface to ffmpeg as a video stream. bbt maps the
-  audio track plus that optional art stream (`-map 0:a -map 0:v?`) and copies
-  the image bytes through unchanged (`-c:v copy`), marking it as the front
-  cover in the output container — `attached_pic=1` / ID3 APIC for MP3,
-  `covr` atom for M4A/ALAC. Files without embedded art are unaffected.
-- **MP3 tag version** — bbt writes ID3v2.3 (`-id3v2_version 3`) for the
-  broadest compatibility with legacy MSC device firmware. `bbt probe` reads
-  both 2.3 and 2.4 correctly either way.
-- **Already-in-target-format skip** — if a source already matches the target
-  codec and container, bbt skips it entirely (the file is left byte-for-byte
-  unchanged), so its tags and artwork are trivially preserved.
-
-`bbt probe` reports whether a source carries embedded art:
-
-```
-artwork:     present
-```
-
----
-
-## SP canonical WAV materialization
-
-When decoding AAC/M4A to PCM WAV (`--codec pcm_s16le --container wav`), bbt honors **iTunSMPB** gapless metadata to produce frame counts that match Apple's `afconvert` / CoreAudio — the reference for BakBeat's MiniDisc SP write path.
-
-### What bbt does
-
-AAC encoders add a silent priming block at the start and a silent trailing padding block at the end. The iTunSMPB tag records how many samples each block contains, plus the authoritative total of valid PCM samples.
-
-- **Encoder delay (priming):** handled automatically by ffmpeg via `start_pts` — bbt does not double-trim.
-- **Trailing padding:** bbt reads iTunSMPB word 2 (`trailing_padding_samples`). When non-zero, it applies `atrim=end_sample=N` to strip those samples before writing the WAV.
-- **Authoritative length:** when iTunSMPB word 3 (`total_pcm_samples`) is present, bbt uses it as the trim target directly — this matches afconvert's output for every known fixture.
-- **When iTunSMPB is absent:** no trim is applied. Lossless sources (FLAC, ALAC) are not affected.
-
-### Example — dbpoweramp M4A with iTunSMPB
-
-```
-iTunSMPB: 00000000 00000840 000003C8 0000000000AE13F8
-                   ↑        ↑        ↑
-                   2112     968      11408376
-                   delay    trailing total_pcm
-```
-
-| Encoder | Output frames |
-|---|---|
-| `afconvert` | 11,408,376 ✓ |
-| ffmpeg (no trim) | 11,409,344 ✗ (+968 trailing) |
-| bbt (with trim) | 11,408,376 ✓ |
-
-The `gapless_trim` decision is recorded in the execution graph JSON for auditability:
-
-```json
-"gapless_trim": {
-  "encoder_delay": 2112,
-  "trailing_padding": 968,
-  "output_frames": 11408376
-}
-```
-
----
-
-## JSON output
-
-Pass `--json` to any command to receive machine-readable NDJSON on stdout — one complete JSON event per line. Designed for programmatic consumers like BakBeat's status lane.
-
-```bash
-bbt transcode input.flac --profile generic-mp3-320 --output ./out/ --json
-```
+With `--json`, stdout is newline-delimited JSON, one event per line:
 
 ```json
 {"type":"phase_start","phase":"probe","total":1}
-{"type":"file_complete","phase":"probe","current":1,"total":1,"file":"input.flac","elapsed_ms":12}
-{"type":"phase_complete","phase":"probe","total":1}
-{"type":"phase_start","phase":"plan"}
+{"type":"file_complete","phase":"probe","current":1,"total":1,"file":"track.flac","elapsed_ms":12}
 {"type":"phase_complete","phase":"plan","jobs":1,"skipped":0}
 {"type":"phase_start","phase":"resolve"}
-{"type":"phase_complete","phase":"resolve"}
 {"type":"phase_start","phase":"encode","total":1}
-{"type":"encode_start","current":1,"total":1,"file":"input.flac","output":"out/input.mp3"}
-{"type":"file_complete","phase":"encode","current":1,"total":1,"file":"input.flac","output":"out/input.mp3","elapsed_ms":843}
-{"type":"phase_complete","phase":"encode","success":1,"failed":0}
-{"type":"complete","success":1,"failed":0,"total_elapsed_ms":860,"manifest":"out/manifest.json"}
+{"type":"encode_start","current":1,"total":1,"file":"track.flac","output":"out/track.mp3"}
+{"type":"file_complete","phase":"encode","current":1,"total":1,"file":"track.flac","output":"out/track.mp3","elapsed_ms":860}
+{"type":"complete","success":1,"failed":0,"total_elapsed_ms":900,"manifest":"out/manifest.json"}
 ```
 
-**Failure events** are dedicated types, not boolean flags:
+## Tool Boundary
 
-```json
-{"type":"file_failed","phase":"encode","current":2,"total":5,"file":"bad.flac","error":"..."}
-{"type":"operation_failed","phase":"resolve","error":"FFmpeg is required but not found in PATH"}
-```
+`bbt` calls external encoders such as FFmpeg, ffprobe, and atracdenc as
+subprocesses. BakBeat should call `bbt`, not those tools directly, for
+transcoding/remuxing work that needs structured progress and error reporting.
 
-**Resume events** include carry-forward counts:
-
-```json
-{"type":"phase_start","phase":"encode","total":2,"carrying_forward":3}
-{"type":"complete","success":2,"failed":0,"carried_forward":3,"re_encoded":2,...}
-```
-
-**Exit codes:** `0` = success, `1` = error (bad arguments, missing files, etc.), `2` = one or more encodes failed.
-
----
-
-## Manifest format
-
-Every run produces a manifest JSON. Keep it alongside your transcoded files.
-
-```json
-{
-  "schema_version": "1.0",
-  "manifest_id": "a3f2c1d4-...",
-  "completed_at": "2025-06-05T19:00:00Z",
-  "success_count": 12,
-  "failure_count": 0,
-  "carried_forward_count": 0,
-  "graph": { ... },
-  "artifacts": [
-    {
-      "node_id": "...",
-      "output_path": "out/track.mp3",
-      "sha256": "e3b0c44298fc...",
-      "size_bytes": 8421376,
-      "encode_elapsed_ms": 843,
-      "status": { "type": "success" }
-    }
-  ]
-}
-```
-
-Re-verify at any time: `bbt verify manifest.json`
-
-Re-run failures: `bbt resume manifest.json`
-
----
-
-## Verifying releases
-
-- **macOS**: Apple Silicon release binaries are signed with an Apple Developer ID and notarized.
-- **Windows**: built and signed locally, not part of the automated release pipeline.
-- **Linux**: the release archive is detached-signed with GPG. Each release includes `bbt-linux-x86_64.tar.gz.asc` alongside the archive. Verify with:
-
-  ```
-  gpg --import release-signing-pubkey.asc
-  gpg --verify bbt-linux-x86_64.tar.gz.asc bbt-linux-x86_64.tar.gz
-  ```
-
-  Public key: [release-signing-pubkey.asc](release-signing-pubkey.asc) (fingerprint `1735 20FA 7DE5 2E29 5DA2  F8EB 03CF 0FBC 7B1B DDB0`).
-
----
-
-## License
-
-Mozilla Public License 2.0 — see [LICENSE](LICENSE).
-
-### Legal separation from BakBeat
-
-BakBeatTranscoder exists as a separate open-source component specifically to maintain a clean legal boundary between [BakBeat](https://bakbeat.com) (a proprietary closed source application) and the separately licensed external tools this transcoder depends on.
-
-```
-BakBeat (proprietary, commercial)
-    ↓ invokes as subprocess — clean process boundary
-bbt (MPL-2.0, this project) ← third-party tool compliance sits here
-    ↓ invokes as subprocesses
-FFmpeg / ffprobe / atracdenc (external tools)
-```
-
-**BakBeat ships `bbt` and nothing else.** All interaction with separately licensed external tools happens inside `bbt`. BakBeat avoids direct exposure because it never directly distributes, links against, or calls these tools itself.
-
-**This project** (bbt) distributes FFmpeg, ffprobe, and atracdenc alongside its platform releases. This is bbt's third-party tooling compliance obligation, not BakBeat's. FFmpeg and atracdenc are called as external subprocesses — never statically or dynamically linked — which keeps those tools separate from bbt's source code.
-
-Every release archive includes `LICENSE` (MPL-2.0) and `THIRD-PARTY-LICENSES`, which contains:
-- FFmpeg/ffprobe attribution, source pointers, and build-configuration license notes
-- LGPL-3.0 attribution and source pointer for atracdenc
-- BSD-3-Clause notice for `encoding_rs` (required for binary redistributions)
-- Unicode-3.0 notice for `unicode-ident` (required for binary redistributions)
-- Attribution for all other statically linked Rust crate dependencies
-
-The MPL-2.0 "Larger Work" provision explicitly permits use of MPL-2.0 code inside proprietary software without requiring the proprietary software to become open source. This is by design: `bbt` is intended to be embeddable in BakBeat without legal risk to BakBeat.
+The public repository carries the MPL-2.0 source and third-party notices so the
+tool boundary stays clear for BakBeat's proprietary app.

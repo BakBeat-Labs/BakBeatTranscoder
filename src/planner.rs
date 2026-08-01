@@ -2,10 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Projection planner — takes (inputs, profile) and produces a TranscodePlan.
+//! Projection planner — takes (inputs, requested spec) and produces a TranscodePlan.
 //!
 //! The planner is a pure function over the filesystem state at plan time.
-//! It probes each input file and resolves all profile "inherit from source"
+//! It probes each input file and resolves all "inherit from source"
 //! fields (None sample_rate, None channels, None width/height) into explicit values.
 //! No encoding happens here.
 
@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::gapless;
 use crate::graph::{EncodeParams, ExecutionGraph, ExecutionNode, GaplessTrim};
 use crate::probe::{probe_media, AudioInfo, MediaInfo};
-use crate::profiles::DeviceProfile;
+use crate::spec::TranscodeSpec;
 
 /// A planned job before adapter assignment. Holds resolved params but no adapter yet.
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ pub struct PlannedJob {
 
 pub struct TranscodePlan {
     pub jobs: Vec<PlannedJob>,
-    /// Files probed but skipped because they already match the target format.
+    /// Files probed but skipped because they already match the requested format.
     pub skipped_count: usize,
 }
 
@@ -40,15 +40,15 @@ pub struct TranscodePlan {
 ///
 /// `force` disables the "already in target format" skip check — every input
 /// becomes a job regardless of whether it appears to already match the
-/// profile. Callers that have already decided an encode is required (e.g.
+/// spec. Callers that have already decided an encode is required (e.g.
 /// BakBeat re-rating an MP3 to a lower bitrate, where source and target codec
-/// match but bitrate does not) must pass `force = true`; `already_matches_profile`
+/// match but bitrate does not) must pass `force = true`; `already_matches_spec`
 /// only compares codec + container and would otherwise wrongly skip the file.
 ///
 /// `on_probed` is called after each file: `(current_1_based, total, path, elapsed_ms)`.
 pub fn build_plan(
     inputs: &[PathBuf],
-    profile: &DeviceProfile,
+    spec: &TranscodeSpec,
     output_dir: &Path,
     source_root: Option<&Path>,
     force: bool,
@@ -65,16 +65,15 @@ pub fn build_plan(
 
         on_probed(idx + 1, total, input_path, elapsed_ms);
 
-        if !force && source_info.already_matches_profile(profile) {
+        if !force && source_info.already_matches_spec(spec) {
             tracing::debug!(path = ?input_path, "skipping: already in target format");
             skipped_count += 1;
             continue;
         }
 
-        let output_path =
-            resolve_output_path(input_path, source_root, output_dir, &profile.extension);
+        let output_path = resolve_output_path(input_path, source_root, output_dir, &spec.extension);
 
-        let params = resolve_params(&source_info, profile);
+        let params = resolve_params(&source_info, spec);
 
         jobs.push(PlannedJob {
             source_path: input_path.clone(),
@@ -84,7 +83,10 @@ pub fn build_plan(
         });
     }
 
-    Ok(TranscodePlan { jobs, skipped_count })
+    Ok(TranscodePlan {
+        jobs,
+        skipped_count,
+    })
 }
 
 /// Convert a `TranscodePlan` (with assigned adapters) into a serializable `ExecutionGraph`.
@@ -131,10 +133,10 @@ fn resolve_output_path(
     output
 }
 
-/// Resolve profile `Option` fields against probed source info.
+/// Resolve spec `Option` fields against probed source info.
 /// Every field in `EncodeParams` is explicit after this — no Nones where a
 /// concrete value is needed for deterministic encoding.
-fn resolve_params(source: &MediaInfo, profile: &DeviceProfile) -> EncodeParams {
+fn resolve_params(source: &MediaInfo, spec: &TranscodeSpec) -> EncodeParams {
     // Pull source audio params
     let (src_sample_rate, src_channels) = match source {
         MediaInfo::Audio(a) => (a.sample_rate_hz, a.channels),
@@ -144,7 +146,7 @@ fn resolve_params(source: &MediaInfo, profile: &DeviceProfile) -> EncodeParams {
         }
     };
 
-    // Pull source video params (for "preserve source" semantics when profile leaves them None)
+    // Pull source video params (for "preserve source" semantics when the spec leaves them None)
     let (src_width, src_height, src_frame_rate) = match source {
         MediaInfo::Audio(_) => (None, None, None),
         MediaInfo::Video(v) => {
@@ -168,20 +170,21 @@ fn resolve_params(source: &MediaInfo, profile: &DeviceProfile) -> EncodeParams {
     }
 
     EncodeParams {
-        media_type: profile.media_type.clone(),
-        container: profile.container.clone(),
-        extension: profile.extension.clone(),
-        cbr: profile.cbr,
-        audio_codec: profile.audio_codec.clone(),
-        audio_bitrate_kbps: profile.audio_bitrate_kbps,
-        sample_rate_hz: profile.sample_rate_hz.or(src_sample_rate).unwrap_or(44100),
-        channels: profile.channels.or(src_channels).unwrap_or(2),
-        video_codec: profile.video_codec.clone(),
-        video_bitrate_kbps: profile.video_bitrate_kbps,
-        width: profile.width.or(src_width),
-        height: profile.height.or(src_height),
-        frame_rate: profile.frame_rate.or(src_frame_rate),
-        pixel_format: profile.pixel_format.clone(),
+        media_type: spec.media_type.clone(),
+        container: spec.container.clone(),
+        extension: spec.extension.clone(),
+        cbr: spec.cbr,
+        audio_codec: spec.audio_codec.clone(),
+        audio_bitrate_kbps: spec.audio_bitrate_kbps,
+        sample_rate_hz: spec.sample_rate_hz.or(src_sample_rate).unwrap_or(44100),
+        channels: spec.channels.or(src_channels).unwrap_or(2),
+        video_codec: spec.video_codec.clone(),
+        video_bitrate_kbps: spec.video_bitrate_kbps,
+        width: spec.width.or(src_width),
+        height: spec.height.or(src_height),
+        frame_rate: spec.frame_rate.or(src_frame_rate),
+        pixel_format: spec.pixel_format.clone(),
+        preserve_artwork: spec.preserve_artwork,
         gapless_trim,
         extra: BTreeMap::new(),
     }
@@ -243,8 +246,8 @@ fn is_aac_m4a(audio: &AudioInfo) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::probe::AudioInfo;
+    use std::collections::BTreeMap;
 
     fn make_aac_m4a(tags: BTreeMap<String, String>, n_frames: Option<u64>) -> MediaInfo {
         MediaInfo::Audio(AudioInfo {

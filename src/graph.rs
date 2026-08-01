@@ -15,9 +15,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Schema 1.1 — renamed codec→audio_codec, bitrate_kbps→audio_bitrate_kbps;
-/// added MediaType, video stream fields to EncodeParams.
-pub const GRAPH_SCHEMA_VERSION: &str = "1.1";
+/// Schema 1.2 — concrete caller specs, plus explicit audio artwork preservation.
+pub const GRAPH_SCHEMA_VERSION: &str = "1.2";
 
 /// Whether a node encodes audio-only or a video file (with embedded audio track).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -90,6 +89,11 @@ pub struct EncodeParams {
     pub sample_rate_hz: u32,
     pub channels: u8,
 
+    /// For audio outputs, whether to copy embedded cover art/attached pictures.
+    /// Defaults true so older serialized graphs preserve the previous behavior.
+    #[serde(default = "default_preserve_artwork")]
+    pub preserve_artwork: bool,
+
     // ── Video stream ──────────────────────────────────────────────────────────
     // All None for audio-only nodes.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,6 +122,10 @@ pub struct EncodeParams {
     pub extra: BTreeMap<String, String>,
 }
 
+fn default_preserve_artwork() -> bool {
+    true
+}
+
 impl ExecutionGraph {
     pub fn new(nodes: Vec<ExecutionNode>) -> Self {
         let graph_id = Uuid::new_v4();
@@ -139,8 +147,8 @@ impl ExecutionGraph {
 
     pub fn load_from_file(path: &std::path::Path) -> anyhow::Result<Self> {
         use crate::error::BbtError;
-        let content = std::fs::read_to_string(path)
-            .map_err(|_| BbtError::GraphNotFound(path.to_owned()))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|_| BbtError::GraphNotFound(path.to_owned()))?;
         serde_json::from_str(&content).map_err(|e| {
             BbtError::InvalidGraph {
                 path: path.to_owned(),

@@ -33,7 +33,10 @@ impl FfmpegAdapter {
     pub fn detect() -> Option<Self> {
         binaries::find_ffmpeg().map(|p| {
             let has_libxvid = detect_libxvid(&p);
-            Self { binary: p, has_libxvid }
+            Self {
+                binary: p,
+                has_libxvid,
+            }
         })
     }
 
@@ -63,7 +66,7 @@ impl FfmpegAdapter {
 
             // ASF/WMA support for embedded artwork is inconsistent across old
             // players and can make ffmpeg reject otherwise valid transcodes.
-            if p.audio_codec != "wma" {
+            if p.preserve_artwork && p.audio_codec != "wma" {
                 args.extend([
                     "-map".into(),
                     "0:v?".into(),
@@ -72,6 +75,8 @@ impl FfmpegAdapter {
                     "-disposition:v:0".into(),
                     "attached_pic".into(),
                 ]);
+            } else {
+                args.extend(["-vn".into(), "-sn".into(), "-dn".into()]);
             }
         }
 
@@ -241,6 +246,14 @@ mod tests {
     use uuid::Uuid;
 
     fn audio_node(audio_codec: &str, container: &str) -> ExecutionNode {
+        audio_node_with_artwork(audio_codec, container, true)
+    }
+
+    fn audio_node_with_artwork(
+        audio_codec: &str,
+        container: &str,
+        preserve_artwork: bool,
+    ) -> ExecutionNode {
         ExecutionNode {
             id: Uuid::new_v4(),
             sequence: 0,
@@ -258,6 +271,7 @@ mod tests {
                 audio_bitrate_kbps: Some(128),
                 sample_rate_hz: 44100,
                 channels: 2,
+                preserve_artwork,
                 video_codec: None,
                 video_bitrate_kbps: None,
                 width: None,
@@ -288,6 +302,7 @@ mod tests {
                 audio_bitrate_kbps: Some(64),
                 sample_rate_hz: 44100,
                 channels: 2,
+                preserve_artwork: true,
                 video_codec: Some("xvid".to_string()),
                 video_bitrate_kbps: Some(256),
                 width: Some(320),
@@ -331,6 +346,20 @@ mod tests {
         let adapter = FfmpegAdapter::for_testing(false);
         let args = adapter.build_args(&audio_node("mp3", "mp3")).unwrap();
         assert_eq!(windows_containing(&args, "-id3v2_version"), Some("3"));
+    }
+
+    #[test]
+    fn audio_only_target_strips_artwork_and_side_streams() {
+        let adapter = FfmpegAdapter::for_testing(false);
+        let args = adapter
+            .build_args(&audio_node_with_artwork("mp3", "mp3", false))
+            .unwrap();
+
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:a"));
+        assert!(!args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v?"));
+        assert!(args.contains(&"-vn".to_string()));
+        assert!(args.contains(&"-sn".to_string()));
+        assert!(args.contains(&"-dn".to_string()));
     }
 
     #[test]

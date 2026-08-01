@@ -7,12 +7,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum BbtError {
-    #[error("profile not found: '{0}'")]
-    ProfileNotFound(String),
-
-    #[error("invalid profile file {path}: {reason}")]
-    InvalidProfile { path: PathBuf, reason: String },
-
     #[error("capability resolver: {0}")]
     CapabilityError(String),
 

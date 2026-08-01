@@ -27,7 +27,7 @@ use symphonia::core::meta::{MetadataOptions, StandardTagKey, Value};
 use symphonia::core::probe::Hint;
 
 use crate::binaries;
-use crate::profiles::DeviceProfile;
+use crate::spec::TranscodeSpec;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -99,17 +99,17 @@ pub struct AudioStream {
 // ── MediaInfo helpers ─────────────────────────────────────────────────────────
 
 impl MediaInfo {
-    /// Whether this file already matches a device profile's target format.
+    /// Whether this file already matches the requested target format.
     /// Used by the planner to skip no-op transcodes.
-    pub fn already_matches_profile(&self, profile: &DeviceProfile) -> bool {
+    pub fn already_matches_spec(&self, spec: &TranscodeSpec) -> bool {
         use crate::graph::MediaType;
-        match (self, &profile.media_type) {
+        match (self, &spec.media_type) {
             (MediaInfo::Audio(a), MediaType::Audio) => {
-                a.codec.eq_ignore_ascii_case(&profile.audio_codec)
-                    && a.container.eq_ignore_ascii_case(&profile.container)
+                a.codec.eq_ignore_ascii_case(&spec.audio_codec)
+                    && a.container.eq_ignore_ascii_case(&spec.container)
             }
             (MediaInfo::Video(v), MediaType::Video) => {
-                let video_ok = profile
+                let video_ok = spec
                     .video_codec
                     .as_deref()
                     .map(|vc| {
@@ -122,9 +122,9 @@ impl MediaInfo {
                 let audio_ok = v
                     .audio_streams
                     .first()
-                    .map(|s| s.codec.eq_ignore_ascii_case(&profile.audio_codec))
+                    .map(|s| s.codec.eq_ignore_ascii_case(&spec.audio_codec))
                     .unwrap_or(false);
-                let container_ok = v.container.eq_ignore_ascii_case(&profile.container);
+                let container_ok = v.container.eq_ignore_ascii_case(&spec.container);
                 video_ok && audio_ok && container_ok
             }
             // Media type mismatch — never a pass-through
@@ -163,7 +163,10 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
         hint.with_extension(ext);
     }
 
-    let fmt_opts = FormatOptions { enable_gapless: false, ..Default::default() };
+    let fmt_opts = FormatOptions {
+        enable_gapless: false,
+        ..Default::default()
+    };
     let meta_opts: MetadataOptions = Default::default();
 
     let mut probed = symphonia::default::get_probe()
@@ -259,8 +262,10 @@ pub fn probe_video_file(path: &Path) -> Result<VideoInfo> {
 
     let output = Command::new(&ffprobe)
         .args([
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_streams",
             "-show_format",
             &path.to_string_lossy(),
@@ -270,7 +275,11 @@ pub fn probe_video_file(path: &Path) -> Result<VideoInfo> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("ffprobe failed for {}: {}", path.display(), stderr.trim()));
+        return Err(anyhow!(
+            "ffprobe failed for {}: {}",
+            path.display(),
+            stderr.trim()
+        ));
     }
 
     let json: serde_json::Value =
@@ -295,9 +304,7 @@ fn parse_ffprobe_output(path: &Path, json: &serde_json::Value) -> Result<VideoIn
         .unwrap_or("unknown")
         .to_string();
 
-    let duration_secs = fmt["duration"]
-        .as_str()
-        .and_then(|s| s.parse::<f64>().ok());
+    let duration_secs = fmt["duration"].as_str().and_then(|s| s.parse::<f64>().ok());
 
     let mut video_streams: Vec<VideoStream> = Vec::new();
     let mut audio_streams: Vec<AudioStream> = Vec::new();
@@ -360,16 +367,19 @@ fn parse_frame_rate(s: Option<&str>) -> Option<f32> {
     let mut parts = s.splitn(2, '/');
     let num: f32 = parts.next()?.parse().ok()?;
     let den: f32 = parts.next().unwrap_or("1").parse().ok()?;
-    if den == 0.0 { None } else { Some(num / den) }
+    if den == 0.0 {
+        None
+    } else {
+        Some(num / den)
+    }
 }
 
 // ── Routing ───────────────────────────────────────────────────────────────────
 
 fn is_video_extension(path: &Path) -> bool {
     const VIDEO_EXTS: &[&str] = &[
-        "mp4", "m4v", "mov", "avi", "mkv", "wmv", "flv", "webm",
-        "mpeg", "mpg", "m2v", "ts", "mts", "m2ts", "3gp", "3g2",
-        "ogv", "vob", "f4v",
+        "mp4", "m4v", "mov", "avi", "mkv", "wmv", "flv", "webm", "mpeg", "mpg", "m2v", "ts", "mts",
+        "m2ts", "3gp", "3g2", "ogv", "vob", "f4v",
     ];
     path.extension()
         .and_then(|e| e.to_str())

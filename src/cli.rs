@@ -4,15 +4,15 @@
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "bbt",
     version,
-    about = "BakBeat Transcoder — deterministic audio transcoding",
-    long_about = "Deterministic audio transcoder for BakBeat device sync.\n\
-                  Produces identical output for identical inputs and parameters.\n\
+    about = "BakBeat Transcoder — structured media transcoding",
+    long_about = "Structured transcoder for BakBeat device sync.\n\
+                  BakBeat supplies the requested artifact spec; bbt executes it.\n\
                   Source files are never modified."
 )]
 pub struct Cli {
@@ -31,7 +31,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Transcode audio files: probe → plan → resolve → execute → verify.
+    /// Transcode media files: probe → plan → resolve → execute → verify.
     /// Produces a manifest.json in the output directory.
     Transcode(TranscodeArgs),
 
@@ -48,41 +48,43 @@ pub enum Commands {
     /// Resume a previous run: re-encode failed or missing artifacts, carry forward intact ones.
     Resume(ResumeArgs),
 
-    /// Probe an audio file and show its format, codec, and metadata.
+    /// Probe a media file and show its format, codec, and metadata.
     Probe(ProbeArgs),
-
-    /// List available device profiles.
-    Profiles(ProfilesArgs),
 
     /// Check which encoder backends are available on this system.
     Check,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CliMediaType {
+    Audio,
+    Video,
+}
+
 #[derive(Args, Debug)]
 pub struct TranscodeArgs {
-    /// Input audio files or directories (directories are searched recursively)
+    /// Input media files or directories (directories are searched recursively)
     #[arg(required = true, num_args = 1..)]
     pub inputs: Vec<PathBuf>,
 
-    /// Device profile (e.g. minidisc-lp2, generic-mp3-320).
-    /// Run `bbt profiles` to list all available profiles.
-    #[arg(short, long, conflicts_with = "codec")]
-    pub profile: Option<String>,
+    /// Requested media type.
+    #[arg(long, value_enum, default_value = "audio")]
+    pub media: CliMediaType,
 
-    /// Output codec (e.g. mp3, aac, flac, vorbis, opus, alac, wma, atrac3).
-    #[arg(long, conflicts_with = "profile")]
+    /// Output audio codec. `--codec` is kept as the short caller-facing alias.
+    #[arg(long, alias = "audio-codec")]
     pub codec: Option<String>,
 
     /// Output container (e.g. mp3, m4a, ogg, wav, asf, oma).
     /// Defaults to the codec value when not specified.
-    #[arg(long, conflicts_with = "profile")]
+    #[arg(long)]
     pub container: Option<String>,
 
     /// Output file extension. Defaults to container when not specified.
-    #[arg(long, conflicts_with = "profile")]
+    #[arg(long)]
     pub extension: Option<String>,
 
-    /// Output bitrate in kbps (for lossy codecs)
+    /// Output audio bitrate in kbps. `--bitrate` is kept for existing callers.
     #[arg(long)]
     pub bitrate: Option<u32>,
 
@@ -93,6 +95,34 @@ pub struct TranscodeArgs {
     /// Output channel count (default: preserve source)
     #[arg(long)]
     pub channels: Option<u8>,
+
+    /// Output video codec for video requests.
+    #[arg(long)]
+    pub video_codec: Option<String>,
+
+    /// Output video bitrate in kbps.
+    #[arg(long)]
+    pub video_bitrate: Option<u32>,
+
+    /// Output video width in pixels. Defaults to preserve source.
+    #[arg(long)]
+    pub width: Option<u32>,
+
+    /// Output video height in pixels. Defaults to preserve source.
+    #[arg(long)]
+    pub height: Option<u32>,
+
+    /// Output frame rate. Defaults to preserve source.
+    #[arg(long)]
+    pub frame_rate: Option<f32>,
+
+    /// FFmpeg pixel format, e.g. yuv420p. Defaults to adapter choice.
+    #[arg(long)]
+    pub pixel_format: Option<String>,
+
+    /// Emit only the primary audio stream; do not copy cover art or side streams.
+    #[arg(long)]
+    pub audio_only: bool,
 
     /// Force constant bitrate encoding (default: true for lossy codecs)
     #[arg(long, default_value = "true")]
@@ -110,10 +140,6 @@ pub struct TranscodeArgs {
     /// Where to save the manifest (default: <output>/manifest.json)
     #[arg(long)]
     pub manifest: Option<PathBuf>,
-
-    /// Additional profile directories to search
-    #[arg(long)]
-    pub profile_dir: Vec<PathBuf>,
 
     /// Abort the entire batch on the first encode error
     #[arg(long)]
@@ -134,20 +160,21 @@ pub struct PlanArgs {
     #[arg(required = true, num_args = 1..)]
     pub inputs: Vec<PathBuf>,
 
-    #[arg(short, long, conflicts_with = "codec")]
-    pub profile: Option<String>,
+    /// Requested media type.
+    #[arg(long, value_enum, default_value = "audio")]
+    pub media: CliMediaType,
 
-    /// Output codec (e.g. mp3, aac, flac, vorbis, opus, alac, wma, atrac3).
-    #[arg(long, conflicts_with = "profile")]
+    /// Output audio codec. `--codec` is kept as the short caller-facing alias.
+    #[arg(long, alias = "audio-codec")]
     pub codec: Option<String>,
 
     /// Output container (e.g. mp3, m4a, ogg, wav, asf, oma).
     /// Defaults to the codec value when not specified.
-    #[arg(long, conflicts_with = "profile")]
+    #[arg(long)]
     pub container: Option<String>,
 
     /// Output file extension. Defaults to container when not specified.
-    #[arg(long, conflicts_with = "profile")]
+    #[arg(long)]
     pub extension: Option<String>,
 
     #[arg(long)]
@@ -158,6 +185,34 @@ pub struct PlanArgs {
 
     #[arg(long)]
     pub channels: Option<u8>,
+
+    /// Output video codec for video requests.
+    #[arg(long)]
+    pub video_codec: Option<String>,
+
+    /// Output video bitrate in kbps.
+    #[arg(long)]
+    pub video_bitrate: Option<u32>,
+
+    /// Output video width in pixels. Defaults to preserve source.
+    #[arg(long)]
+    pub width: Option<u32>,
+
+    /// Output video height in pixels. Defaults to preserve source.
+    #[arg(long)]
+    pub height: Option<u32>,
+
+    /// Output frame rate. Defaults to preserve source.
+    #[arg(long)]
+    pub frame_rate: Option<f32>,
+
+    /// FFmpeg pixel format, e.g. yuv420p. Defaults to adapter choice.
+    #[arg(long)]
+    pub pixel_format: Option<String>,
+
+    /// Emit only the primary audio stream; do not copy cover art or side streams.
+    #[arg(long)]
+    pub audio_only: bool,
 
     #[arg(long, default_value = "true")]
     pub cbr: bool,
@@ -171,9 +226,6 @@ pub struct PlanArgs {
     /// Where to save the graph (default: graph.json)
     #[arg(long, default_value = "graph.json")]
     pub graph_out: PathBuf,
-
-    #[arg(long)]
-    pub profile_dir: Vec<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -210,16 +262,6 @@ pub struct ResumeArgs {
 
 #[derive(Args, Debug)]
 pub struct ProbeArgs {
-    /// Audio file to probe
+    /// Media file to probe
     pub file: PathBuf,
-}
-
-#[derive(Args, Debug)]
-pub struct ProfilesArgs {
-    /// Show full profile details instead of a summary list
-    #[arg(long)]
-    pub detail: bool,
-
-    /// Filter by profile ID prefix
-    pub filter: Option<String>,
 }

@@ -11,9 +11,9 @@ mod gapless;
 mod graph;
 mod planner;
 mod probe;
-mod profiles;
 mod progress;
 mod resolver;
+mod spec;
 mod verifier;
 
 use std::path::PathBuf;
@@ -23,8 +23,9 @@ use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use cli::{Cli, Commands};
+use cli::{Cli, CliMediaType, Commands};
 use graph::MediaType;
+use spec::TranscodeSpec;
 
 fn main() {
     let cli = Cli::parse();
@@ -32,8 +33,7 @@ fn main() {
     // Initialize tracing — respects BBT_LOG env var or --log-level flag
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(&cli.log_level)),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cli.log_level)),
         )
         .with_target(false)
         .with_writer(std::io::stderr) // log to stderr; stdout is for output data
@@ -58,7 +58,6 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Verify(args) => cmd_verify(args, cli.json),
         Commands::Resume(args) => cmd_resume(args, cli.json),
         Commands::Probe(args) => cmd_probe(args, cli.json),
-        Commands::Profiles(args) => cmd_profiles(args, cli.json),
         Commands::Check => cmd_check(cli.json),
     }
 }
@@ -68,9 +67,23 @@ fn run(cli: Cli) -> Result<()> {
 fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
     use progress::{Emitter, Event, Phase};
 
-    let profile = resolve_profile(&args.profile, &args.codec, &args.container,
-                                  &args.extension, args.bitrate, args.sample_rate,
-                                  args.channels, args.cbr, &args.profile_dir)?;
+    let spec = resolve_transcode_spec(
+        args.media,
+        &args.codec,
+        &args.container,
+        &args.extension,
+        args.bitrate,
+        args.sample_rate,
+        args.channels,
+        args.cbr,
+        &args.video_codec,
+        args.video_bitrate,
+        args.width,
+        args.height,
+        args.frame_rate,
+        &args.pixel_format,
+        args.audio_only,
+    )?;
 
     let inputs = expand_inputs(&args.inputs)?;
     if inputs.is_empty() {
@@ -78,14 +91,25 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let source_root = args.source_root.as_deref().or_else(|| common_prefix(&inputs));
+    let source_root = args
+        .source_root
+        .as_deref()
+        .or_else(|| common_prefix(&inputs));
     let mut emitter = Emitter::new(json);
 
     // Phase 1: Probe + Plan
-    emitter.emit(Event::PhaseStart { phase: Phase::Probe, total: Some(inputs.len()), carrying_forward: None });
+    emitter.emit(Event::PhaseStart {
+        phase: Phase::Probe,
+        total: Some(inputs.len()),
+        carrying_forward: None,
+    });
 
     let mut plan = planner::build_plan(
-        &inputs, &profile, &args.output, source_root, args.no_skip,
+        &inputs,
+        &spec,
+        &args.output,
+        source_root,
+        args.no_skip,
         |current, total, path, elapsed_ms| {
             emitter.emit(Event::FileComplete {
                 phase: Phase::Probe,
@@ -107,7 +131,11 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
         failed: None,
     });
 
-    emitter.emit(Event::PhaseStart { phase: Phase::Plan, total: None, carrying_forward: None });
+    emitter.emit(Event::PhaseStart {
+        phase: Phase::Plan,
+        total: None,
+        carrying_forward: None,
+    });
     emitter.emit(Event::PhaseComplete {
         phase: Phase::Plan,
         total: None,
@@ -128,7 +156,10 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
                  refusing to exit 0 with an empty output directory",
                 inputs.len()
             );
-            emitter.emit(Event::OperationFailed { phase: Some(Phase::Plan), error: err.to_string() });
+            emitter.emit(Event::OperationFailed {
+                phase: Some(Phase::Plan),
+                error: err.to_string(),
+            });
             return Err(err);
         }
 
@@ -144,7 +175,11 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
     }
 
     // Phase 2: Resolve capabilities
-    emitter.emit(Event::PhaseStart { phase: Phase::Resolve, total: None, carrying_forward: None });
+    emitter.emit(Event::PhaseStart {
+        phase: Phase::Resolve,
+        total: None,
+        carrying_forward: None,
+    });
     let caps = resolver::ResolvedCapabilities::detect();
     if let Err(e) = caps.validate_plan(&plan.jobs) {
         emitter.emit(Event::OperationFailed {
@@ -170,7 +205,9 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
     let manifest = executor::execute_graph(&graph, &caps, &mut emitter, args.stop_on_error)?;
 
     // Phase 5: Save manifest + emit complete
-    let manifest_path = args.manifest.unwrap_or_else(|| args.output.join("manifest.json"));
+    let manifest_path = args
+        .manifest
+        .unwrap_or_else(|| args.output.join("manifest.json"));
     manifest.save_to_file(&manifest_path)?;
 
     emitter.emit(Event::Complete {
@@ -199,18 +236,43 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
 fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
     use progress::{Emitter, Event, Phase};
 
-    let profile = resolve_profile(&args.profile, &args.codec, &args.container,
-                                  &args.extension, args.bitrate, args.sample_rate,
-                                  args.channels, args.cbr, &args.profile_dir)?;
+    let spec = resolve_transcode_spec(
+        args.media,
+        &args.codec,
+        &args.container,
+        &args.extension,
+        args.bitrate,
+        args.sample_rate,
+        args.channels,
+        args.cbr,
+        &args.video_codec,
+        args.video_bitrate,
+        args.width,
+        args.height,
+        args.frame_rate,
+        &args.pixel_format,
+        args.audio_only,
+    )?;
 
     let inputs = expand_inputs(&args.inputs)?;
-    let source_root = args.source_root.as_deref().or_else(|| common_prefix(&inputs));
+    let source_root = args
+        .source_root
+        .as_deref()
+        .or_else(|| common_prefix(&inputs));
     let mut emitter = Emitter::new(json);
 
-    emitter.emit(Event::PhaseStart { phase: Phase::Probe, total: Some(inputs.len()), carrying_forward: None });
+    emitter.emit(Event::PhaseStart {
+        phase: Phase::Probe,
+        total: Some(inputs.len()),
+        carrying_forward: None,
+    });
 
     let mut plan = planner::build_plan(
-        &inputs, &profile, &args.output, source_root, false,
+        &inputs,
+        &spec,
+        &args.output,
+        source_root,
+        false,
         |current, total, path, elapsed_ms| {
             emitter.emit(Event::FileComplete {
                 phase: Phase::Probe,
@@ -232,7 +294,11 @@ fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
         failed: None,
     });
 
-    emitter.emit(Event::PhaseStart { phase: Phase::Resolve, total: None, carrying_forward: None });
+    emitter.emit(Event::PhaseStart {
+        phase: Phase::Resolve,
+        total: None,
+        carrying_forward: None,
+    });
     let caps = resolver::ResolvedCapabilities::detect();
     caps.validate_plan(&plan.jobs)?;
     caps.assign_adapters(&mut plan.jobs);
@@ -274,14 +340,16 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
     let caps = resolver::ResolvedCapabilities::detect();
 
     // Re-validate: adapter availability may have changed since plan time
-    let dummy_jobs: Vec<planner::PlannedJob> = graph.nodes.iter().map(|n| {
-        planner::PlannedJob {
+    let dummy_jobs: Vec<planner::PlannedJob> = graph
+        .nodes
+        .iter()
+        .map(|n| planner::PlannedJob {
             source_path: n.input_path.clone(),
             output_path: n.output_path.clone(),
             params: n.params.clone(),
             assigned_adapter: Some(n.adapter.clone()),
-        }
-    }).collect();
+        })
+        .collect();
     caps.validate_plan(&dummy_jobs)?;
 
     let mut emitter = progress::Emitter::new(json);
@@ -315,9 +383,10 @@ fn cmd_verify(args: cli::VerifyArgs, json: bool) -> Result<()> {
     let manifest = verifier::TranscodeManifest::load_from_file(&args.manifest)?;
     let results = manifest.verify();
 
-    let ok_count = results.iter().filter(|r| {
-        matches!(&r.status, verifier::VerificationStatus::Ok)
-    }).count();
+    let ok_count = results
+        .iter()
+        .filter(|r| matches!(&r.status, verifier::VerificationStatus::Ok))
+        .count();
     let fail_count = results.len() - ok_count;
 
     if json {
@@ -348,10 +417,7 @@ fn cmd_verify(args: cli::VerifyArgs, json: bool) -> Result<()> {
                     );
                 }
                 verifier::VerificationStatus::OriginallyFailed { error } => {
-                    println!(
-                        "  ORIGINALLY FAILED  {}: {error}",
-                        r.output_path.display()
-                    );
+                    println!("  ORIGINALLY FAILED  {}: {error}", r.output_path.display());
                 }
                 verifier::VerificationStatus::CarriedForward => {
                     println!("  carried  {}", r.output_path.display());
@@ -382,14 +448,17 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
     let caps = resolver::ResolvedCapabilities::detect();
 
     // Build dummy jobs for capability validation using the graph nodes
-    let dummy_jobs: Vec<planner::PlannedJob> = prior.graph.nodes.iter().map(|n| {
-        planner::PlannedJob {
+    let dummy_jobs: Vec<planner::PlannedJob> = prior
+        .graph
+        .nodes
+        .iter()
+        .map(|n| planner::PlannedJob {
             source_path: n.input_path.clone(),
             output_path: n.output_path.clone(),
             params: n.params.clone(),
             assigned_adapter: Some(n.adapter.clone()),
-        }
-    }).collect();
+        })
+        .collect();
 
     let mut emitter = Emitter::new(json);
 
@@ -404,12 +473,12 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
     let manifest = executor::resume_graph(&prior, &caps, &mut emitter, args.stop_on_error)?;
 
     let out_path = args.output_manifest.unwrap_or_else(|| {
-        let stem = args.manifest
+        let stem = args
+            .manifest
             .file_stem()
             .unwrap_or_default()
             .to_string_lossy();
-        args.manifest
-            .with_file_name(format!("{stem}-resumed.json"))
+        args.manifest.with_file_name(format!("{stem}-resumed.json"))
     });
 
     manifest.save_to_file(&out_path)?;
@@ -452,17 +521,35 @@ fn cmd_probe(args: cli::ProbeArgs, json: bool) -> Result<()> {
             println!("type:        audio");
             println!("container:   {}", a.container);
             println!("codec:       {}", a.codec);
-            if let Some(sr) = a.sample_rate_hz { println!("sample rate: {sr} Hz"); }
-            if let Some(ch) = a.channels      { println!("channels:    {ch}"); }
-            if let Some(bps) = a.bits_per_sample { println!("bit depth:   {bps}"); }
-            if let Some(dur) = a.duration_secs {
-                println!("duration:    {:.1}s ({:.0}m{:.0}s)", dur, (dur / 60.0).floor(), dur % 60.0);
+            if let Some(sr) = a.sample_rate_hz {
+                println!("sample rate: {sr} Hz");
             }
-            if let Some(br) = a.bitrate_kbps { println!("bitrate:     ~{br} kbps"); }
-            println!("artwork:     {}", if a.has_artwork { "present" } else { "absent" });
+            if let Some(ch) = a.channels {
+                println!("channels:    {ch}");
+            }
+            if let Some(bps) = a.bits_per_sample {
+                println!("bit depth:   {bps}");
+            }
+            if let Some(dur) = a.duration_secs {
+                println!(
+                    "duration:    {:.1}s ({:.0}m{:.0}s)",
+                    dur,
+                    (dur / 60.0).floor(),
+                    dur % 60.0
+                );
+            }
+            if let Some(br) = a.bitrate_kbps {
+                println!("bitrate:     ~{br} kbps");
+            }
+            println!(
+                "artwork:     {}",
+                if a.has_artwork { "present" } else { "absent" }
+            );
             if !a.tags.is_empty() {
                 println!("tags:");
-                for (k, v) in &a.tags { println!("  {k}: {v}"); }
+                for (k, v) in &a.tags {
+                    println!("  {k}: {v}");
+                }
             }
         }
         MediaInfo::Video(v) => {
@@ -470,73 +557,43 @@ fn cmd_probe(args: cli::ProbeArgs, json: bool) -> Result<()> {
             println!("type:        video");
             println!("container:   {}", v.container);
             if let Some(dur) = v.duration_secs {
-                println!("duration:    {:.1}s ({:.0}m{:.0}s)", dur, (dur / 60.0).floor(), dur % 60.0);
+                println!(
+                    "duration:    {:.1}s ({:.0}m{:.0}s)",
+                    dur,
+                    (dur / 60.0).floor(),
+                    dur % 60.0
+                );
             }
             for (i, vs) in v.video_streams.iter().enumerate() {
                 println!("video[{i}]:    {} {}x{}", vs.codec, vs.width, vs.height);
-                if let Some(fps) = vs.frame_rate { println!("  fps:       {fps:.3}"); }
-                if let Some(br)  = vs.bitrate_kbps { println!("  bitrate:   ~{br} kbps"); }
-                if let Some(pf)  = &vs.pixel_format { println!("  pixel fmt: {pf}"); }
+                if let Some(fps) = vs.frame_rate {
+                    println!("  fps:       {fps:.3}");
+                }
+                if let Some(br) = vs.bitrate_kbps {
+                    println!("  bitrate:   ~{br} kbps");
+                }
+                if let Some(pf) = &vs.pixel_format {
+                    println!("  pixel fmt: {pf}");
+                }
             }
             for (i, aus) in v.audio_streams.iter().enumerate() {
                 println!("audio[{i}]:    {}", aus.codec);
-                if let Some(sr) = aus.sample_rate_hz { println!("  sample rate: {sr} Hz"); }
-                if let Some(ch) = aus.channels       { println!("  channels:    {ch}"); }
-                if let Some(br) = aus.bitrate_kbps   { println!("  bitrate:     ~{br} kbps"); }
+                if let Some(sr) = aus.sample_rate_hz {
+                    println!("  sample rate: {sr} Hz");
+                }
+                if let Some(ch) = aus.channels {
+                    println!("  channels:    {ch}");
+                }
+                if let Some(br) = aus.bitrate_kbps {
+                    println!("  bitrate:     ~{br} kbps");
+                }
             }
             if !v.tags.is_empty() {
                 println!("tags:");
-                for (k, val) in &v.tags { println!("  {k}: {val}"); }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-// ── profiles ──────────────────────────────────────────────────────────────────
-
-fn cmd_profiles(args: cli::ProfilesArgs, json: bool) -> Result<()> {
-    let all = profiles::list_builtin_profiles();
-
-    let filtered: Vec<_> = if let Some(filter) = &args.filter {
-        all.iter()
-            .filter(|(id, _)| id.starts_with(filter.as_str()))
-            .collect()
-    } else {
-        all.iter().collect()
-    };
-
-    if json {
-        let ids: Vec<&str> = filtered.iter().map(|(id, _)| id.as_str()).collect();
-        println!("{}", serde_json::to_string_pretty(&ids)?);
-    } else if args.detail {
-        for (id, _) in &filtered {
-            match profiles::DeviceProfile::load_by_id(id, &[]) {
-                Ok(p) => {
-                    println!("── {} ──", p.id);
-                    println!("  name:      {}", p.name);
-                    if let Some(v) = &p.vendor { println!("  vendor:    {v}"); }
-                    println!("  media:     {:?}", p.media_type);
-                    println!("  audio:     {}", p.audio_codec);
-                    if let Some(br) = p.audio_bitrate_kbps { println!("  a-bitrate: {br} kbps"); }
-                    if let Some(vc) = &p.video_codec { println!("  video:     {vc}"); }
-                    if let Some(vbr) = p.video_bitrate_kbps { println!("  v-bitrate: {vbr} kbps"); }
-                    if let (Some(w), Some(h)) = (p.width, p.height) { println!("  res:       {w}x{h}"); }
-                    println!("  container: {}", p.container);
-                    if let Some(sr) = p.sample_rate_hz { println!("  samplerate:{sr} Hz"); }
-                    println!("  cbr:       {}", p.cbr);
-                    if let Some(n) = &p.notes { println!("  notes:     {n}"); }
-                    println!();
+                for (k, val) in &v.tags {
+                    println!("  {k}: {val}");
                 }
-                Err(e) => eprintln!("  {id}: error loading profile: {e}"),
             }
-        }
-    } else {
-        println!("{:<25} {}", "ID", "NAME");
-        println!("{}", "─".repeat(60));
-        for (id, name) in &filtered {
-            println!("{id:<25} {name}");
         }
     }
 
@@ -559,15 +616,18 @@ fn cmd_check(json: bool) -> Result<()> {
     } else {
         let show = |name: &str, path: &Option<std::path::PathBuf>| match path {
             Some(p) => println!("  {name:<12} found    {}", p.display()),
-            None    => println!("  {name:<12} NOT FOUND"),
+            None => println!("  {name:<12} NOT FOUND"),
         };
         println!("Binaries:");
-        show("ffmpeg",    &bins.ffmpeg);
-        show("ffprobe",   &bins.ffprobe);
+        show("ffmpeg", &bins.ffmpeg);
+        show("ffprobe", &bins.ffprobe);
         show("atracdenc", &bins.atracdenc);
         println!("\nEncoder adapters:");
         for (name, adapter) in &caps.adapters {
-            println!("  {name}: available ({})", adapter.supported_output_codecs().join(", "));
+            println!(
+                "  {name}: available ({})",
+                adapter.supported_output_codecs().join(", ")
+            );
         }
         for name in ["ffmpeg", "atrac"] {
             if !caps.adapters.contains_key(name) {
@@ -581,9 +641,8 @@ fn cmd_check(json: bool) -> Result<()> {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-/// Build a DeviceProfile from either a named profile or explicit codec/container flags.
-fn resolve_profile(
-    profile_id: &Option<String>,
+fn resolve_transcode_spec(
+    media: CliMediaType,
     codec: &Option<String>,
     container: &Option<String>,
     extension: &Option<String>,
@@ -591,49 +650,56 @@ fn resolve_profile(
     sample_rate: Option<u32>,
     channels: Option<u8>,
     cbr: bool,
-    profile_dirs: &[PathBuf],
-) -> Result<profiles::DeviceProfile> {
-    if let Some(id) = profile_id {
-        return profiles::DeviceProfile::load_by_id(id, profile_dirs);
+    video_codec: &Option<String>,
+    video_bitrate: Option<u32>,
+    width: Option<u32>,
+    height: Option<u32>,
+    frame_rate: Option<f32>,
+    pixel_format: &Option<String>,
+    audio_only: bool,
+) -> Result<TranscodeSpec> {
+    let codec = codec
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("--codec must be specified"))?;
+    if matches!(media, CliMediaType::Video) && video_codec.is_none() {
+        return Err(anyhow::anyhow!(
+            "--video-codec must be specified for --media video"
+        ));
     }
-
-    let codec = codec.as_deref().ok_or_else(|| {
-        anyhow::anyhow!("either --profile or --codec must be specified")
-    })?;
     // container defaults to codec (e.g. --codec mp3 → container "mp3")
     let container = container.as_deref().unwrap_or(codec);
     // extension defaults to container (e.g. container "m4a" → extension "m4a")
     let extension = extension.as_deref().unwrap_or(container);
 
-    Ok(profiles::DeviceProfile {
-        id: "custom".to_string(),
-        name: format!("Custom ({codec})"),
-        vendor: None,
-        description: "Manually specified format".to_string(),
-        media_type: MediaType::Audio,
+    Ok(TranscodeSpec {
+        media_type: match media {
+            CliMediaType::Audio => MediaType::Audio,
+            CliMediaType::Video => MediaType::Video,
+        },
         container: container.to_string(),
         audio_codec: codec.to_string(),
         audio_bitrate_kbps: bitrate,
         sample_rate_hz: sample_rate,
         channels,
-        video_codec: None,
-        video_bitrate_kbps: None,
-        width: None,
-        height: None,
-        frame_rate: None,
-        pixel_format: None,
+        video_codec: video_codec.clone(),
+        video_bitrate_kbps: video_bitrate,
+        width,
+        height,
+        frame_rate,
+        pixel_format: pixel_format.clone(),
         cbr,
         extension: extension.to_string(),
-        notes: None,
+        preserve_artwork: !audio_only,
     })
 }
 
 /// Expand a list of paths: files are used directly, directories are
-/// walked recursively for known audio extensions.
+/// walked recursively for known media extensions.
 fn expand_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    const AUDIO_EXTENSIONS: &[&str] = &[
-        "mp3", "flac", "m4a", "aac", "ogg", "opus", "wav", "aiff", "aif",
-        "wma", "ape", "wv", "mka", "mp2", "mp1",
+    const MEDIA_EXTENSIONS: &[&str] = &[
+        "mp3", "flac", "m4a", "aac", "ogg", "opus", "wav", "aiff", "aif", "wma", "ape", "wv",
+        "mka", "mp2", "mp1", "mp4", "m4v", "mov", "avi", "mkv", "webm", "wmv", "mpg", "mpeg",
+        "3gp", "3g2",
     ];
 
     let mut files = Vec::new();
@@ -648,15 +714,12 @@ fn expand_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_lowercase();
-                if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+                if MEDIA_EXTENSIONS.contains(&ext.as_str()) {
                     files.push(entry);
                 }
             }
         } else {
-            return Err(anyhow::anyhow!(
-                "input not found: {}",
-                input.display()
-            ));
+            return Err(anyhow::anyhow!("input not found: {}", input.display()));
         }
     }
 

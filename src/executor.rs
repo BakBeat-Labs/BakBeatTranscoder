@@ -18,9 +18,7 @@ use std::collections::HashMap;
 use crate::graph::ExecutionGraph;
 use crate::progress::{Emitter, Event, Phase};
 use crate::resolver::ResolvedCapabilities;
-use crate::verifier::{
-    artifact_still_valid, ArtifactRecord, ArtifactStatus, TranscodeManifest,
-};
+use crate::verifier::{artifact_still_valid, ArtifactRecord, ArtifactStatus, TranscodeManifest};
 
 pub fn execute_graph(
     graph: &ExecutionGraph,
@@ -162,11 +160,7 @@ pub fn resume_graph(
     let graph = &prior.graph;
 
     // Build lookup: node_id → prior artifact record
-    let prior_artifacts: HashMap<_, _> = prior
-        .artifacts
-        .iter()
-        .map(|r| (r.node_id, r))
-        .collect();
+    let prior_artifacts: HashMap<_, _> = prior.artifacts.iter().map(|r| (r.node_id, r)).collect();
 
     // Partition nodes into carry-forward vs needs-encode
     let mut carry_forward: Vec<ArtifactRecord> = Vec::new();
@@ -218,7 +212,10 @@ pub fn resume_graph(
         });
 
         let adapter = caps.adapters.get(&node.adapter).ok_or_else(|| {
-            anyhow::anyhow!("adapter '{}' assigned but unavailable — planner bug", node.adapter)
+            anyhow::anyhow!(
+                "adapter '{}' assigned but unavailable — planner bug",
+                node.adapter
+            )
         })?;
 
         let encode_start = Instant::now();
@@ -280,7 +277,9 @@ pub fn resume_graph(
                     duration_ms: None,
                     encode_elapsed_ms: elapsed_ms,
                     verified_at: None,
-                    status: ArtifactStatus::Failed { error: e.to_string() },
+                    status: ArtifactStatus::Failed {
+                        error: e.to_string(),
+                    },
                 }
             }
         };

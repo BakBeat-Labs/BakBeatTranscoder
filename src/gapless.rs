@@ -35,7 +35,11 @@ pub fn parse_itunsmpb(value: &str) -> Option<ItunesSmpb> {
     let encoder_delay = u64::from_str_radix(words[1], 16).ok()?;
     let trailing_padding = u64::from_str_radix(words[2], 16).ok()?;
     let total_pcm_samples = words.get(3).and_then(|w| u64::from_str_radix(w, 16).ok());
-    Some(ItunesSmpb { encoder_delay, trailing_padding, total_pcm_samples })
+    Some(ItunesSmpb {
+        encoder_delay,
+        trailing_padding,
+        total_pcm_samples,
+    })
 }
 
 #[cfg(test)]

@@ -63,9 +63,12 @@ impl AtracAdapter {
         sample_rate: u32,
         channels: u8,
     ) -> Result<PathBuf, AdapterError> {
-        let ffmpeg = self.ffmpeg.as_ref().ok_or_else(|| AdapterError::BinaryNotFound {
-            binary: "ffmpeg".to_string(),
-        })?;
+        let ffmpeg = self
+            .ffmpeg
+            .as_ref()
+            .ok_or_else(|| AdapterError::BinaryNotFound {
+                binary: "ffmpeg".to_string(),
+            })?;
 
         let wav_path = tmp_dir.path().join("intermediate.wav");
         trace!(?ffmpeg, input = ?input, wav = ?wav_path, "decoding to intermediate WAV");
@@ -80,8 +83,10 @@ impl AtracAdapter {
                 "-ac",
                 &channels.to_string(),
                 // 16-bit signed PCM — atracdenc expects standard WAV
-                "-codec:a", "pcm_s16le",
-                "-f", "wav",
+                "-codec:a",
+                "pcm_s16le",
+                "-f",
+                "wav",
                 &wav_path.to_string_lossy(),
             ])
             .output()
@@ -141,9 +146,11 @@ impl EncoderAdapter for AtracAdapter {
     }
 
     fn encode(&self, node: &ExecutionNode) -> Result<ArtifactInfo, AdapterError> {
-        let (binary, tool) = self.encoder_binary().ok_or_else(|| AdapterError::BinaryNotFound {
-            binary: "atracdenc or atracenc".to_string(),
-        })?;
+        let (binary, tool) = self
+            .encoder_binary()
+            .ok_or_else(|| AdapterError::BinaryNotFound {
+                binary: "atracdenc or atracenc".to_string(),
+            })?;
 
         ensure_parent(&node.output_path)?;
 
@@ -218,8 +225,10 @@ fn build_atracdenc_args(
     }
 
     args.extend([
-        "-i".into(), input.to_string_lossy().into_owned(),
-        "-o".into(), output.to_string_lossy().into_owned(),
+        "-i".into(),
+        input.to_string_lossy().into_owned(),
+        "-o".into(),
+        output.to_string_lossy().into_owned(),
     ]);
 
     Ok(args)
