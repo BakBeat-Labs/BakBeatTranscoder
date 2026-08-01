@@ -169,4 +169,8 @@ static BUILTIN_PROFILES: &[(&str, &str)] = &[
         "creative-zen-nano-plus-wma",
         include_str!("../profiles/creative-zen-nano-plus-wma.toml"),
     ),
+    (
+        "gpx-mt861b",
+        include_str!("../profiles/gpx-mt861b.toml"),
+    ),
 ];

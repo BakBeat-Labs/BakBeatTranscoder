@@ -36,6 +36,15 @@ pub trait EncoderAdapter: Send + Sync {
     /// Whether the underlying binary is present and executable.
     fn is_available(&self) -> bool;
 
+    /// Whether this adapter's active binary can actually produce the given
+    /// codec right now. Defaults to a static membership check against
+    /// `supported_output_codecs`; adapters whose binary may be built without
+    /// some optional encoder (e.g. FFmpeg without `--enable-libxvid`) should
+    /// override this with a runtime check.
+    fn is_codec_available(&self, codec: &str) -> bool {
+        self.supported_output_codecs().contains(&codec)
+    }
+
     /// Encode one node. Receives fully resolved parameters.
     /// Must not modify the input file. Output directory will be created if absent.
     fn encode(&self, node: &ExecutionNode) -> Result<ArtifactInfo, AdapterError>;

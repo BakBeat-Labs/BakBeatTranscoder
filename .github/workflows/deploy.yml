@@ -121,17 +121,22 @@ jobs:
       - name: Bundle FFmpeg (macOS)
         if: matrix.platform == 'macos-arm64'
         run: |
-          FFMPEG_URL="https://github.com/kiimelon/FFmpeg-arm-silicon/releases/download/0.5.0/FFmpeg-arm-silicon-Tools-20260424.zip"
-          FFMPEG_SHA256="7262b3ff400c0e88235647d99ab79067010694f059c4aa8af0bb0c43a951b2fc"
+          # Built from source via BakBeat-Labs' fork of kiimelon's Apple
+          # Silicon build. The upstream kiimelon prebuilt release lacks
+          # libxvid, which the GPX MT861B device profile requires.
+          brew install cmake meson ninja autoconf automake libtool pkg-config
 
-          curl -fSL "$FFMPEG_URL" -o ffmpeg-macos-arm64.zip
-          echo "$FFMPEG_SHA256  ffmpeg-macos-arm64.zip" | shasum -a 256 -c -
-          unzip -q ffmpeg-macos-arm64.zip -d ffmpeg-macos-arm64
-          cp ffmpeg-macos-arm64/Tools/ffmpeg dist/ffmpeg
-          cp ffmpeg-macos-arm64/Tools/ffprobe dist/ffprobe
+          git clone --depth 1 --branch add-libxvid \
+            https://github.com/BakBeat-Labs/FFmpeg-arm-silicon.git \
+            ffmpeg-arm-silicon
+          (cd ffmpeg-arm-silicon && bash scripts/build-all-static.sh)
+
+          cp ffmpeg-arm-silicon/local-static/bin/ffmpeg dist/ffmpeg
+          cp ffmpeg-arm-silicon/local-static/bin/ffprobe dist/ffprobe
           chmod +x dist/ffmpeg dist/ffprobe
           lipo -archs dist/ffmpeg | grep -qw arm64
           lipo -archs dist/ffprobe | grep -qw arm64
+          dist/ffmpeg -hide_banner -encoders | grep -qw libxvid
 
       - name: Bundle FFmpeg (Linux)
         if: matrix.platform == 'linux-x86_64'

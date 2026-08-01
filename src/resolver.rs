@@ -100,6 +100,26 @@ impl ResolvedCapabilities {
                     job.source_path.display()
                 ));
             }
+
+            if let Some(video_codec) = &job.params.video_codec {
+                match self.adapters.get("ffmpeg") {
+                    Some(adapter) if adapter.is_codec_available(video_codec) => {}
+                    Some(_) if video_codec == "xvid" => {
+                        errors.push(format!(
+                            "Bundled ffmpeg does not provide a libxvid encoder yet. \
+                             (file: {})",
+                            job.source_path.display()
+                        ));
+                    }
+                    _ => {
+                        errors.push(format!(
+                            "no adapter can encode video to codec '{}' (file: {})",
+                            video_codec,
+                            job.source_path.display()
+                        ));
+                    }
+                }
+            }
         }
 
         if errors.is_empty() {
@@ -119,3 +139,77 @@ impl ResolvedCapabilities {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::ffmpeg::FfmpegAdapter;
+    use crate::graph::{EncodeParams, MediaType};
+    use std::collections::BTreeMap;
+
+    fn gpx_mt861b_job() -> PlannedJob {
+        PlannedJob {
+            source_path: "/tmp/in.mp4".into(),
+            output_path: "/tmp/out.avi".into(),
+            assigned_adapter: None,
+            params: EncodeParams {
+                media_type: MediaType::Video,
+                container: "avi".to_string(),
+                extension: "avi".to_string(),
+                cbr: true,
+                audio_codec: "mp3".to_string(),
+                audio_bitrate_kbps: Some(64),
+                sample_rate_hz: 44100,
+                channels: 2,
+                video_codec: Some("xvid".to_string()),
+                video_bitrate_kbps: Some(256),
+                width: Some(320),
+                height: Some(240),
+                frame_rate: Some(20.0),
+                pixel_format: None,
+                gapless_trim: None,
+                extra: BTreeMap::new(),
+            },
+        }
+    }
+
+    fn capabilities_with_ffmpeg(has_libxvid: bool) -> ResolvedCapabilities {
+        let mut adapters: HashMap<String, Box<dyn EncoderAdapter>> = HashMap::new();
+        adapters.insert(
+            "ffmpeg".to_string(),
+            Box::new(FfmpegAdapter::for_testing(has_libxvid)),
+        );
+        ResolvedCapabilities { adapters }
+    }
+
+    #[test]
+    fn xvid_target_blocked_when_ffmpeg_lacks_libxvid() {
+        let capabilities = capabilities_with_ffmpeg(false);
+        let err = capabilities
+            .validate_plan(&[gpx_mt861b_job()])
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Bundled ffmpeg does not provide a libxvid encoder yet."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn xvid_target_permitted_when_ffmpeg_has_libxvid() {
+        let capabilities = capabilities_with_ffmpeg(true);
+        assert!(capabilities.validate_plan(&[gpx_mt861b_job()]).is_ok());
+    }
+
+    #[test]
+    fn xvid_target_blocked_when_ffmpeg_missing_entirely() {
+        let capabilities = ResolvedCapabilities {
+            adapters: HashMap::new(),
+        };
+        let err = capabilities
+            .validate_plan(&[gpx_mt861b_job()])
+            .unwrap_err();
+        // Missing ffmpeg produces both the generic "ffmpeg is required" error
+        // and the video-codec-specific one; just assert the batch fails.
+        assert!(err.to_string().contains("no adapter can encode video"));
+    }
+}

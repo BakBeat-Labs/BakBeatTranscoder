@@ -23,11 +23,26 @@ use crate::graph::{ExecutionNode, MediaType};
 
 pub struct FfmpegAdapter {
     binary: PathBuf,
+    /// Whether the active binary's `-encoders` output lists `libxvid`.
+    /// Not every FFmpeg build enables optional GPL encoders like Xvid, so
+    /// this is checked at runtime rather than assumed from the codec map.
+    has_libxvid: bool,
 }
 
 impl FfmpegAdapter {
     pub fn detect() -> Option<Self> {
-        binaries::find_ffmpeg().map(|p| Self { binary: p })
+        binaries::find_ffmpeg().map(|p| {
+            let has_libxvid = detect_libxvid(&p);
+            Self { binary: p, has_libxvid }
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_testing(has_libxvid: bool) -> Self {
+        Self {
+            binary: "/usr/bin/ffmpeg".into(),
+            has_libxvid,
+        }
     }
 
     fn build_args(&self, node: &ExecutionNode) -> Result<Vec<String>, AdapterError> {
@@ -168,6 +183,7 @@ impl EncoderAdapter for FfmpegAdapter {
             "hevc",
             "mpeg4",
             "mpeg2",
+            "xvid",
             "vp8",
             "vp9",
             "av1",
@@ -176,6 +192,13 @@ impl EncoderAdapter for FfmpegAdapter {
 
     fn is_available(&self) -> bool {
         self.binary.exists()
+    }
+
+    fn is_codec_available(&self, codec: &str) -> bool {
+        if codec == "xvid" {
+            return self.has_libxvid;
+        }
+        self.supported_output_codecs().contains(&codec)
     }
 
     fn encode(&self, node: &ExecutionNode) -> Result<ArtifactInfo, AdapterError> {
@@ -247,6 +270,36 @@ mod tests {
         }
     }
 
+    fn gpx_mt861b_video_node() -> ExecutionNode {
+        ExecutionNode {
+            id: Uuid::new_v4(),
+            sequence: 0,
+            input_path: "/tmp/in.mp4".into(),
+            input_sha256: "deadbeef".to_string(),
+            input_size_bytes: 0,
+            output_path: "/tmp/out.avi".into(),
+            adapter: "ffmpeg".to_string(),
+            params: EncodeParams {
+                media_type: MediaType::Video,
+                container: "avi".to_string(),
+                extension: "avi".to_string(),
+                cbr: true,
+                audio_codec: "mp3".to_string(),
+                audio_bitrate_kbps: Some(64),
+                sample_rate_hz: 44100,
+                channels: 2,
+                video_codec: Some("xvid".to_string()),
+                video_bitrate_kbps: Some(256),
+                width: Some(320),
+                height: Some(240),
+                frame_rate: Some(20.0),
+                pixel_format: None,
+                gapless_trim: None,
+                extra: BTreeMap::new(),
+            },
+        }
+    }
+
     fn windows_containing<'a>(args: &'a [String], first: &str) -> Option<&'a str> {
         args.windows(2)
             .find(|w| w[0] == first)
@@ -255,9 +308,7 @@ mod tests {
 
     #[test]
     fn audio_transcode_maps_audio_and_optional_cover_art() {
-        let adapter = FfmpegAdapter {
-            binary: "/usr/bin/ffmpeg".into(),
-        };
+        let adapter = FfmpegAdapter::for_testing(false);
         let args = adapter.build_args(&audio_node("mp3", "mp3")).unwrap();
 
         // Must map the audio track explicitly and the optional embedded-art
@@ -277,36 +328,28 @@ mod tests {
 
     #[test]
     fn mp3_target_uses_id3v2_3_for_device_compatibility() {
-        let adapter = FfmpegAdapter {
-            binary: "/usr/bin/ffmpeg".into(),
-        };
+        let adapter = FfmpegAdapter::for_testing(false);
         let args = adapter.build_args(&audio_node("mp3", "mp3")).unwrap();
         assert_eq!(windows_containing(&args, "-id3v2_version"), Some("3"));
     }
 
     #[test]
     fn non_mp3_target_does_not_force_id3v2_version() {
-        let adapter = FfmpegAdapter {
-            binary: "/usr/bin/ffmpeg".into(),
-        };
+        let adapter = FfmpegAdapter::for_testing(false);
         let args = adapter.build_args(&audio_node("alac", "m4a")).unwrap();
         assert_eq!(windows_containing(&args, "-id3v2_version"), None);
     }
 
     #[test]
     fn always_maps_source_metadata() {
-        let adapter = FfmpegAdapter {
-            binary: "/usr/bin/ffmpeg".into(),
-        };
+        let adapter = FfmpegAdapter::for_testing(false);
         let args = adapter.build_args(&audio_node("mp3", "mp3")).unwrap();
         assert_eq!(windows_containing(&args, "-map_metadata"), Some("0"));
     }
 
     #[test]
     fn wma_target_uses_wmav2_and_skips_cover_art_mapping() {
-        let adapter = FfmpegAdapter {
-            binary: "/usr/bin/ffmpeg".into(),
-        };
+        let adapter = FfmpegAdapter::for_testing(false);
         let args = adapter.build_args(&audio_node("wma", "wma")).unwrap();
 
         assert_eq!(windows_containing(&args, "-codec:a"), Some("wmav2"));
@@ -314,6 +357,80 @@ mod tests {
         assert!(!args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v?"));
         assert_eq!(windows_containing(&args, "-c:v"), None);
     }
+
+    #[test]
+    fn gpx_mt861b_xvid_target_uses_real_libxvid_encoder() {
+        let adapter = FfmpegAdapter::for_testing(true);
+        let args = adapter.build_args(&gpx_mt861b_video_node()).unwrap();
+
+        assert_eq!(windows_containing(&args, "-codec:v"), Some("libxvid"));
+        assert_eq!(windows_containing(&args, "-vf"), Some("scale=320:240"));
+        assert_eq!(windows_containing(&args, "-r"), Some("20"));
+        assert_eq!(windows_containing(&args, "-b:v"), Some("256k"));
+        assert_eq!(windows_containing(&args, "-codec:a"), Some("libmp3lame"));
+        assert_eq!(windows_containing(&args, "-b:a"), Some("64k"));
+        assert_eq!(windows_containing(&args, "-ar"), Some("44100"));
+        assert_eq!(windows_containing(&args, "-ac"), Some("2"));
+    }
+
+    #[test]
+    fn is_codec_available_gates_xvid_on_runtime_libxvid_detection() {
+        let without_libxvid = FfmpegAdapter::for_testing(false);
+        assert!(!without_libxvid.is_codec_available("xvid"));
+
+        let with_libxvid = FfmpegAdapter::for_testing(true);
+        assert!(with_libxvid.is_codec_available("xvid"));
+
+        // Unrelated codecs aren't affected by the libxvid flag either way.
+        assert!(without_libxvid.is_codec_available("mp3"));
+        assert!(with_libxvid.is_codec_available("mp3"));
+    }
+
+    #[test]
+    fn detect_libxvid_true_when_encoders_list_contains_libxvid() {
+        let sample = "\
+Encoders:
+ V..... = Video
+ A..... = Audio
+ -------
+ V....D mpeg4                MPEG-4 part 2
+ V....D libxvid              libxvidcore MPEG-4 part 2 (codec mpeg4)
+ A....D libmp3lame           libmp3lame MP3 (MPEG audio layer 3)
+";
+        assert!(encoders_list_has_libxvid(sample));
+    }
+
+    #[test]
+    fn detect_libxvid_false_when_encoders_list_omits_libxvid() {
+        let sample = "\
+Encoders:
+ V..... = Video
+ A..... = Audio
+ -------
+ V....D mpeg4                MPEG-4 part 2
+ A....D libmp3lame           libmp3lame MP3 (MPEG audio layer 3)
+";
+        assert!(!encoders_list_has_libxvid(sample));
+    }
+}
+
+/// Query the given FFmpeg binary's `-encoders` output for a `libxvid` line.
+/// Xvid is an optional GPL encoder many FFmpeg builds omit; the codec map
+/// alone can't tell us whether it's actually present.
+fn detect_libxvid(binary: &std::path::Path) -> bool {
+    let output = match Command::new(binary).arg("-encoders").output() {
+        Ok(output) => output,
+        Err(_) => return false,
+    };
+    encoders_list_has_libxvid(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parses `ffmpeg -encoders` output, checking for a `libxvid` entry.
+/// Each encoder line is `<6-char flags> <name> <description>`.
+fn encoders_list_has_libxvid(stdout: &str) -> bool {
+    stdout
+        .lines()
+        .any(|line| line.split_whitespace().nth(1) == Some("libxvid"))
 }
 
 /// Maps our codec strings to FFmpeg codec names.
@@ -339,6 +456,7 @@ fn audio_codec_to_ffmpeg(codec: &str) -> Result<&'static str, AdapterError> {
         "h265" | "hevc" => Ok("libx265"),
         "mpeg4" => Ok("mpeg4"),
         "mpeg2" => Ok("mpeg2video"),
+        "xvid" => Ok("libxvid"),
         "vp8" => Ok("libvpx"),
         "vp9" => Ok("libvpx-vp9"),
         "av1" => Ok("libaom-av1"),
