@@ -51,8 +51,17 @@ pub enum Commands {
     /// Probe a media file and show its format, codec, and metadata.
     Probe(ProbeArgs),
 
+    /// Inspect audiobook containers, including chapters and tags.
+    AudiobookProbe(ProbeArgs),
+
+    /// Extract embedded cover artwork from a media file.
+    ExtractArtwork(ExtractArtworkArgs),
+
     /// Check which encoder backends are available on this system.
     Check,
+
+    /// List hardware acceleration methods reported by the bundled FFmpeg.
+    Hwaccels,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -120,6 +129,34 @@ pub struct TranscodeArgs {
     #[arg(long)]
     pub pixel_format: Option<String>,
 
+    /// FFmpeg video filter for the primary output video stream.
+    #[arg(long)]
+    pub video_filter: Option<String>,
+
+    /// FFmpeg video profile for the primary output video stream.
+    #[arg(long)]
+    pub video_profile: Option<String>,
+
+    /// FFmpeg video level for the primary output video stream.
+    #[arg(long)]
+    pub video_level: Option<String>,
+
+    /// Poster image to attach as the secondary video stream.
+    #[arg(long)]
+    pub poster_artwork: Option<PathBuf>,
+
+    /// FFmpeg hardware acceleration method to use while decoding.
+    #[arg(long)]
+    pub hwaccel: Option<String>,
+
+    /// FFmpeg movflags value, e.g. +faststart.
+    #[arg(long)]
+    pub movflags: Option<String>,
+
+    /// FFmpeg audio block size override.
+    #[arg(long)]
+    pub audio_block_size: Option<u32>,
+
     /// Emit only the primary audio stream; do not copy cover art or side streams.
     #[arg(long)]
     pub audio_only: bool,
@@ -131,6 +168,10 @@ pub struct TranscodeArgs {
     /// Output directory (default: ./transcoded)
     #[arg(short, long, default_value = "transcoded")]
     pub output: PathBuf,
+
+    /// Exact output file path. Requires exactly one input after expansion.
+    #[arg(long)]
+    pub output_file: Option<PathBuf>,
 
     /// Source root for computing relative output paths.
     /// Defaults to the common directory prefix of all inputs.
@@ -210,6 +251,34 @@ pub struct PlanArgs {
     #[arg(long)]
     pub pixel_format: Option<String>,
 
+    /// FFmpeg video filter for the primary output video stream.
+    #[arg(long)]
+    pub video_filter: Option<String>,
+
+    /// FFmpeg video profile for the primary output video stream.
+    #[arg(long)]
+    pub video_profile: Option<String>,
+
+    /// FFmpeg video level for the primary output video stream.
+    #[arg(long)]
+    pub video_level: Option<String>,
+
+    /// Poster image to attach as the secondary video stream.
+    #[arg(long)]
+    pub poster_artwork: Option<PathBuf>,
+
+    /// FFmpeg hardware acceleration method to use while decoding.
+    #[arg(long)]
+    pub hwaccel: Option<String>,
+
+    /// FFmpeg movflags value, e.g. +faststart.
+    #[arg(long)]
+    pub movflags: Option<String>,
+
+    /// FFmpeg audio block size override.
+    #[arg(long)]
+    pub audio_block_size: Option<u32>,
+
     /// Emit only the primary audio stream; do not copy cover art or side streams.
     #[arg(long)]
     pub audio_only: bool,
@@ -219,6 +288,10 @@ pub struct PlanArgs {
 
     #[arg(short, long, default_value = "transcoded")]
     pub output: PathBuf,
+
+    /// Exact output file path. Requires exactly one input after expansion.
+    #[arg(long)]
+    pub output_file: Option<PathBuf>,
 
     #[arg(long)]
     pub source_root: Option<PathBuf>,
@@ -264,4 +337,13 @@ pub struct ResumeArgs {
 pub struct ProbeArgs {
     /// Media file to probe
     pub file: PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct ExtractArtworkArgs {
+    /// Input media file.
+    pub input: PathBuf,
+
+    /// Output image file.
+    pub output: PathBuf,
 }

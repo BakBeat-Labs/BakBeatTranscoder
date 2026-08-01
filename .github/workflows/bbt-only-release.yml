@@ -1,0 +1,234 @@
+name: Build, Sign, and Release bbt Only
+
+# Manual fast path for caller-only changes. This builds and releases only the
+# Rust `bbt` binary, without rebuilding or bundling FFmpeg, ffprobe, or atracdenc.
+#
+# Tags use the `bbt-v*` prefix on purpose so this workflow does not trigger the
+# full bundled-tool release workflow, which listens for normal `v*.*.*` tags.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 1.2.3, no leading v)"
+        required: true
+
+env:
+  SIGN_CODE: "true"
+
+jobs:
+  prepare:
+    name: Determine version and tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.set.outputs.version }}
+      tag: ${{ steps.set.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine version and create bbt-only tag
+        id: set
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          TAG="bbt-v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists." >&2
+            exit 1
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build + Sign ${{ matrix.platform }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            binary: bbt
+            archive: bbt-only-macos-arm64.tar.gz
+
+          - platform: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary: bbt
+            archive: bbt-only-linux-x86_64.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux musl tools
+        if: matrix.platform == 'linux-x86_64'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: bbt-only-${{ matrix.platform }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: bbt-only-${{ matrix.platform }}-cargo-
+
+      - name: Build bbt
+        run: |
+          cargo build --release --target "${{ matrix.target }}"
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/bbt
+          chmod +x dist/bbt
+
+      - name: Verify macOS architecture
+        if: matrix.platform == 'macos-arm64'
+        run: lipo -archs dist/bbt | grep -qw arm64
+
+      # ── macOS: Apple Developer ID ──────────────────────────────────────────
+
+      - name: Import Apple signing certificate
+        if: env.SIGN_CODE == 'true' && matrix.platform == 'macos-arm64'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+          echo "$MACOS_CERTIFICATE" | base64 --decode -o "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PWD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep -F "Developer ID Application:"; then
+            echo "Expected a Developer ID Application certificate for Gatekeeper distribution." >&2
+            exit 1
+          fi
+
+      - name: Sign bbt (Apple Developer ID)
+        if: env.SIGN_CODE == 'true' && matrix.platform == 'macos-arm64'
+        run: |
+          codesign --force --options runtime \
+            --sign "${{ secrets.APPLE_DEVELOPER_IDENTITY }}" \
+            dist/bbt
+          codesign --verify --verbose dist/bbt
+          if ! codesign -dv --verbose=4 dist/bbt 2>&1 \
+            | grep -F "Authority=Developer ID Application:"; then
+            echo "dist/bbt was not signed with a Developer ID Application certificate." >&2
+            exit 1
+          fi
+
+      - name: Notarize bbt
+        if: env.SIGN_CODE == 'true' && matrix.platform == 'macos-arm64'
+        run: |
+          ditto -c -k --keepParent dist bbt-only-notarize.zip
+          xcrun notarytool submit bbt-only-notarize.zip \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.APPLE_APP_PASSWORD }}" \
+            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+            --wait
+
+      - name: Bundle license files
+        run: |
+          cp LICENSE dist/LICENSE
+
+      - name: Package bbt-only archive
+        run: |
+          ls -lh dist/
+          cd dist
+          tar -czf "../${{ matrix.archive }}" .
+
+      # ── Linux: GPG-sign the release archive ────────────────────────────────
+
+      - name: Import GPG signing key
+        if: env.SIGN_CODE == 'true' && matrix.platform == 'linux-x86_64'
+        run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+
+      - name: GPG-sign release archive (Linux)
+        if: env.SIGN_CODE == 'true' && matrix.platform == 'linux-x86_64'
+        run: |
+          gpg --batch --pinentry-mode loopback \
+            --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+            --local-user "${{ secrets.GPG_KEY_ID }}" \
+            --detach-sign --armor "${{ matrix.archive }}"
+
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-bbt-only
+          path: ${{ matrix.archive }}
+          retention-days: 7
+
+      - name: Upload GPG signature (Linux)
+        if: env.SIGN_CODE == 'true' && matrix.platform == 'linux-x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-bbt-only-signature
+          path: ${{ matrix.archive }}.asc
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [prepare, build]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+
+      - name: List downloaded artifacts
+        run: find . -name "*.tar.gz" -o -name "*.asc" | sort
+
+      - name: Create bbt-only GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: BakBeat Transcoder bbt ${{ needs.prepare.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}
+          generate_release_notes: true
+          files: |
+            macos-arm64-bbt-only/bbt-only-macos-arm64.tar.gz
+            linux-x86_64-bbt-only/bbt-only-linux-x86_64.tar.gz
+            linux-x86_64-bbt-only-signature/bbt-only-linux-x86_64.tar.gz.asc
+          body: |
+            ## BakBeat Transcoder bbt ${{ needs.prepare.outputs.version }}
+
+            This is the fast bbt-only release path. These archives contain only
+            the structured `bbt` caller binary plus its MPL license. They do not
+            include FFmpeg, ffprobe, or atracdenc.
+
+            Use this release when BakBeatMac only needs a new `bbt` binary and
+            the bundled external media tools have not changed.
+
+            | Platform | Archive |
+            |---|---|
+            | macOS (Apple Silicon) | `bbt-only-macos-arm64.tar.gz` |
+            | Linux x86_64 | `bbt-only-linux-x86_64.tar.gz` |
+
+            The Linux archive is signed with the project GPG key:
+
+            ```
+            gpg --verify bbt-only-linux-x86_64.tar.gz.asc bbt-only-linux-x86_64.tar.gz
+            ```

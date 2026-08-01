@@ -53,7 +53,24 @@ impl FfmpegAdapter {
         let mut args: Vec<String> = Vec::new();
 
         args.push("-y".into());
+        if let Some(hwaccel) = &p.hwaccel {
+            args.extend(["-hwaccel".into(), hwaccel.clone()]);
+        }
         args.extend(["-i".into(), node.input_path.to_string_lossy().into_owned()]);
+
+        if p.media_type == MediaType::Video {
+            if let Some(poster_path) = &p.poster_artwork_path {
+                args.extend(["-i".into(), poster_path.to_string_lossy().into_owned()]);
+                args.extend([
+                    "-map".into(),
+                    "0:v:0".into(),
+                    "-map".into(),
+                    "0:a?".into(),
+                    "-map".into(),
+                    "1:v:0".into(),
+                ]);
+            }
+        }
 
         // Audio-only output: map the audio track plus any embedded cover art
         // (FLAC PICTURE block, MP4 covr/attached_pic, ID3 APIC all surface to
@@ -92,24 +109,32 @@ impl FfmpegAdapter {
         // ── Video stream args (video encodes only) ────────────────────────────
         if p.media_type == MediaType::Video {
             if let Some(vcodec) = &p.video_codec {
-                args.extend(["-codec:v".into(), audio_codec_to_ffmpeg(vcodec)?.into()]);
+                args.extend(["-c:v:0".into(), codec_to_ffmpeg(vcodec)?.into()]);
             }
             if let Some(vbr) = p.video_bitrate_kbps {
-                args.extend(["-b:v".into(), format!("{vbr}k")]);
+                args.extend(["-b:v:0".into(), format!("{vbr}k")]);
             }
-            if let (Some(w), Some(h)) = (p.width, p.height) {
-                args.extend(["-vf".into(), format!("scale={w}:{h}")]);
+            if let Some(filter) = &p.video_filter {
+                args.extend(["-filter:v:0".into(), filter.clone()]);
+            } else if let (Some(w), Some(h)) = (p.width, p.height) {
+                args.extend(["-filter:v:0".into(), format!("scale={w}:{h}")]);
             }
             if let Some(fps) = p.frame_rate {
-                args.extend(["-r".into(), fps.to_string()]);
+                args.extend(["-r:v:0".into(), fps.to_string()]);
             }
             if let Some(pf) = &p.pixel_format {
-                args.extend(["-pix_fmt".into(), pf.clone()]);
+                args.extend(["-pix_fmt:v:0".into(), pf.clone()]);
+            }
+            if let Some(profile) = &p.video_profile {
+                args.extend(["-profile:v:0".into(), profile.clone()]);
+            }
+            if let Some(level) = &p.video_level {
+                args.extend(["-level:v:0".into(), level.clone()]);
             }
         }
 
         // ── Audio track args ──────────────────────────────────────────────────
-        let ffmpeg_acodec = audio_codec_to_ffmpeg(&p.audio_codec)?;
+        let ffmpeg_acodec = codec_to_ffmpeg(&p.audio_codec)?;
         args.extend(["-codec:a".into(), ffmpeg_acodec.into()]);
 
         if let Some(kbps) = p.audio_bitrate_kbps {
@@ -139,6 +164,10 @@ impl FfmpegAdapter {
         args.extend(["-ar".into(), p.sample_rate_hz.to_string()]);
         args.extend(["-ac".into(), p.channels.to_string()]);
 
+        if let Some(block_size) = p.audio_block_size {
+            args.extend(["-block_size".into(), block_size.to_string()]);
+        }
+
         // Strip iTunSMPB trailing padding so output frame count matches afconvert.
         // `atrim=end_sample=N` sees the post-start_pts stream (priming already removed).
         // `asetpts=PTS-STARTPTS` resets timestamps to start at 0 after the trim.
@@ -156,6 +185,21 @@ impl FfmpegAdapter {
             args.push(format!("-{k}"));
             if !v.is_empty() {
                 args.push(v.clone());
+            }
+        }
+
+        if p.media_type == MediaType::Video {
+            args.extend(["-f".into(), p.container.clone()]);
+            if let Some(movflags) = &p.movflags {
+                args.extend(["-movflags".into(), movflags.clone()]);
+            }
+            if p.poster_artwork_path.is_some() {
+                args.extend([
+                    "-c:v:1".into(),
+                    "copy".into(),
+                    "-disposition:v:1".into(),
+                    "attached_pic".into(),
+                ]);
             }
         }
 
@@ -181,14 +225,19 @@ impl EncoderAdapter for FfmpegAdapter {
             "pcm_s32le",
             "pcm_f32le",
             "wav",
+            "adpcm_ima_amv",
             // Video
             "h264",
             "avc",
+            "h264_avc",
             "h265",
             "hevc",
             "mpeg4",
+            "mpeg4_simple_profile",
             "mpeg2",
             "xvid",
+            "avi_motion_jpeg",
+            "mjpeg",
             "vp8",
             "vp9",
             "av1",
@@ -278,6 +327,13 @@ mod tests {
                 height: None,
                 frame_rate: None,
                 pixel_format: None,
+                video_filter: None,
+                video_profile: None,
+                video_level: None,
+                poster_artwork_path: None,
+                hwaccel: None,
+                movflags: None,
+                audio_block_size: None,
                 gapless_trim: None,
                 extra: BTreeMap::new(),
             },
@@ -309,6 +365,13 @@ mod tests {
                 height: Some(240),
                 frame_rate: Some(20.0),
                 pixel_format: None,
+                video_filter: None,
+                video_profile: None,
+                video_level: None,
+                poster_artwork_path: None,
+                hwaccel: None,
+                movflags: None,
+                audio_block_size: None,
                 gapless_trim: None,
                 extra: BTreeMap::new(),
             },
@@ -392,14 +455,49 @@ mod tests {
         let adapter = FfmpegAdapter::for_testing(true);
         let args = adapter.build_args(&gpx_mt861b_video_node()).unwrap();
 
-        assert_eq!(windows_containing(&args, "-codec:v"), Some("libxvid"));
-        assert_eq!(windows_containing(&args, "-vf"), Some("scale=320:240"));
-        assert_eq!(windows_containing(&args, "-r"), Some("20"));
-        assert_eq!(windows_containing(&args, "-b:v"), Some("256k"));
+        assert_eq!(windows_containing(&args, "-c:v:0"), Some("libxvid"));
+        assert_eq!(windows_containing(&args, "-filter:v:0"), Some("scale=320:240"));
+        assert_eq!(windows_containing(&args, "-r:v:0"), Some("20"));
+        assert_eq!(windows_containing(&args, "-b:v:0"), Some("256k"));
         assert_eq!(windows_containing(&args, "-codec:a"), Some("libmp3lame"));
         assert_eq!(windows_containing(&args, "-b:a"), Some("64k"));
         assert_eq!(windows_containing(&args, "-ar"), Some("44100"));
         assert_eq!(windows_containing(&args, "-ac"), Some("2"));
+    }
+
+    #[test]
+    fn video_target_can_attach_poster_and_legacy_ipod_muxer() {
+        let adapter = FfmpegAdapter::for_testing(true);
+        let mut node = gpx_mt861b_video_node();
+        node.output_path = "/tmp/out.m4v".into();
+        node.params.container = "ipod".to_string();
+        node.params.extension = "m4v".to_string();
+        node.params.video_codec = Some("h264_avc".to_string());
+        node.params.video_filter = Some(
+            "scale=320:240:force_original_aspect_ratio=decrease:force_divisible_by=16".to_string(),
+        );
+        node.params.video_profile = Some("baseline".to_string());
+        node.params.video_level = Some("3.0".to_string());
+        node.params.pixel_format = Some("yuv420p".to_string());
+        node.params.poster_artwork_path = Some("/tmp/poster.jpg".into());
+        node.params.hwaccel = Some("videotoolbox".to_string());
+        node.params.movflags = Some("+faststart".to_string());
+
+        let args = adapter.build_args(&node).unwrap();
+
+        assert_eq!(windows_containing(&args, "-hwaccel"), Some("videotoolbox"));
+        assert!(args.windows(2).any(|w| w[0] == "-i" && w[1] == "/tmp/poster.jpg"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v:0"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:a?"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "1:v:0"));
+        assert_eq!(windows_containing(&args, "-c:v:0"), Some("libx264"));
+        assert_eq!(windows_containing(&args, "-profile:v:0"), Some("baseline"));
+        assert_eq!(windows_containing(&args, "-level:v:0"), Some("3.0"));
+        assert_eq!(windows_containing(&args, "-pix_fmt:v:0"), Some("yuv420p"));
+        assert_eq!(windows_containing(&args, "-f"), Some("ipod"));
+        assert_eq!(windows_containing(&args, "-movflags"), Some("+faststart"));
+        assert_eq!(windows_containing(&args, "-c:v:1"), Some("copy"));
+        assert_eq!(windows_containing(&args, "-disposition:v:1"), Some("attached_pic"));
     }
 
     #[test]
@@ -462,9 +560,8 @@ fn encoders_list_has_libxvid(stdout: &str) -> bool {
         .any(|line| line.split_whitespace().nth(1) == Some("libxvid"))
 }
 
-/// Maps our codec strings to FFmpeg codec names.
-/// Used for both audio codec:a and video codec:v arguments.
-fn audio_codec_to_ffmpeg(codec: &str) -> Result<&'static str, AdapterError> {
+/// Maps our caller-facing codec strings to FFmpeg codec names.
+fn codec_to_ffmpeg(codec: &str) -> Result<&'static str, AdapterError> {
     match codec {
         // Audio
         "mp3" => Ok("libmp3lame"),
@@ -480,12 +577,14 @@ fn audio_codec_to_ffmpeg(codec: &str) -> Result<&'static str, AdapterError> {
         "pcm_s32le" => Ok("pcm_s32le"),
         "pcm_f32le" => Ok("pcm_f32le"),
         "wav" => Ok("pcm_s16le"),
+        "adpcm_ima_amv" => Ok("adpcm_ima_amv"),
         // Video
-        "h264" | "avc" => Ok("libx264"),
+        "h264" | "avc" | "h264_avc" => Ok("libx264"),
         "h265" | "hevc" => Ok("libx265"),
-        "mpeg4" => Ok("mpeg4"),
+        "mpeg4" | "mpeg4_simple_profile" => Ok("mpeg4"),
         "mpeg2" => Ok("mpeg2video"),
         "xvid" => Ok("libxvid"),
+        "avi_motion_jpeg" | "mjpeg" => Ok("mjpeg"),
         "vp8" => Ok("libvpx"),
         "vp9" => Ok("libvpx-vp9"),
         "av1" => Ok("libaom-av1"),

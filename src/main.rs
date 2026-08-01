@@ -17,7 +17,7 @@ mod spec;
 mod verifier;
 
 use std::path::PathBuf;
-use std::process;
+use std::process::{self, Command};
 
 use anyhow::Result;
 use clap::Parser;
@@ -58,7 +58,10 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Verify(args) => cmd_verify(args, cli.json),
         Commands::Resume(args) => cmd_resume(args, cli.json),
         Commands::Probe(args) => cmd_probe(args, cli.json),
+        Commands::AudiobookProbe(args) => cmd_audiobook_probe(args),
+        Commands::ExtractArtwork(args) => cmd_extract_artwork(args),
         Commands::Check => cmd_check(cli.json),
+        Commands::Hwaccels => cmd_hwaccels(cli.json),
     }
 }
 
@@ -82,6 +85,13 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
         args.height,
         args.frame_rate,
         &args.pixel_format,
+        &args.video_filter,
+        &args.video_profile,
+        &args.video_level,
+        &args.poster_artwork,
+        &args.hwaccel,
+        &args.movflags,
+        args.audio_block_size,
         args.audio_only,
     )?;
 
@@ -108,6 +118,7 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
         &inputs,
         &spec,
         &args.output,
+        args.output_file.as_deref(),
         source_root,
         args.no_skip,
         |current, total, path, elapsed_ms| {
@@ -251,6 +262,13 @@ fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
         args.height,
         args.frame_rate,
         &args.pixel_format,
+        &args.video_filter,
+        &args.video_profile,
+        &args.video_level,
+        &args.poster_artwork,
+        &args.hwaccel,
+        &args.movflags,
+        args.audio_block_size,
         args.audio_only,
     )?;
 
@@ -271,6 +289,7 @@ fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
         &inputs,
         &spec,
         &args.output,
+        args.output_file.as_deref(),
         source_root,
         false,
         |current, total, path, elapsed_ms| {
@@ -600,6 +619,55 @@ fn cmd_probe(args: cli::ProbeArgs, json: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_audiobook_probe(args: cli::ProbeArgs) -> Result<()> {
+    let ffprobe = binaries::find_ffprobe()
+        .ok_or_else(|| anyhow::anyhow!("ffprobe not found; cannot inspect audiobook container"))?;
+    let output = Command::new(ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=format_name,bit_rate,size,duration:format_tags",
+            "-show_entries",
+            "stream=index,codec_type,codec_name,codec_tag_string,bit_rate,sample_rate,channels,duration,width,height:stream_disposition=attached_pic",
+            "-show_chapters",
+            "-of",
+            "json",
+        ])
+        .arg(&args.file)
+        .output()?;
+
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    if !output.status.success() {
+        process::exit(output.status.code().unwrap_or(1));
+    }
+
+    Ok(())
+}
+
+fn cmd_extract_artwork(args: cli::ExtractArtworkArgs) -> Result<()> {
+    let ffmpeg = binaries::find_ffmpeg()
+        .ok_or_else(|| anyhow::anyhow!("ffmpeg not found; cannot extract artwork"))?;
+    if let Some(parent) = args.output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let output = Command::new(ffmpeg)
+        .args(["-y", "-i"])
+        .arg(&args.input)
+        .args(["-an", "-vcodec", "copy"])
+        .arg(&args.output)
+        .output()?;
+
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    if !output.status.success() {
+        process::exit(output.status.code().unwrap_or(1));
+    }
+
+    Ok(())
+}
+
 // ── check ─────────────────────────────────────────────────────────────────────
 
 fn cmd_check(json: bool) -> Result<()> {
@@ -639,6 +707,39 @@ fn cmd_check(json: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_hwaccels(json: bool) -> Result<()> {
+    let ffmpeg = binaries::find_ffmpeg()
+        .ok_or_else(|| anyhow::anyhow!("ffmpeg not found; cannot query hardware acceleration"))?;
+    let output = Command::new(ffmpeg)
+        .args(["-hide_banner", "-hwaccels"])
+        .output()?;
+    if !output.status.success() {
+        process::exit(output.status.code().unwrap_or(1));
+    }
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let methods: Vec<String> = combined
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.ends_with(':'))
+        .map(ToOwned::to_owned)
+        .collect();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&methods)?);
+    } else {
+        for method in methods {
+            println!("{method}");
+        }
+    }
+
+    Ok(())
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn resolve_transcode_spec(
@@ -656,6 +757,13 @@ fn resolve_transcode_spec(
     height: Option<u32>,
     frame_rate: Option<f32>,
     pixel_format: &Option<String>,
+    video_filter: &Option<String>,
+    video_profile: &Option<String>,
+    video_level: &Option<String>,
+    poster_artwork: &Option<PathBuf>,
+    hwaccel: &Option<String>,
+    movflags: &Option<String>,
+    audio_block_size: Option<u32>,
     audio_only: bool,
 ) -> Result<TranscodeSpec> {
     let codec = codec
@@ -687,6 +795,13 @@ fn resolve_transcode_spec(
         height,
         frame_rate,
         pixel_format: pixel_format.clone(),
+        video_filter: video_filter.clone(),
+        video_profile: video_profile.clone(),
+        video_level: video_level.clone(),
+        poster_artwork_path: poster_artwork.clone(),
+        hwaccel: hwaccel.clone(),
+        movflags: movflags.clone(),
+        audio_block_size,
         cbr,
         extension: extension.to_string(),
         preserve_artwork: !audio_only,

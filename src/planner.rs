@@ -50,10 +50,15 @@ pub fn build_plan(
     inputs: &[PathBuf],
     spec: &TranscodeSpec,
     output_dir: &Path,
+    output_file: Option<&Path>,
     source_root: Option<&Path>,
     force: bool,
     mut on_probed: impl FnMut(usize, usize, &Path, u64),
 ) -> Result<TranscodePlan> {
+    if output_file.is_some() && inputs.len() != 1 {
+        anyhow::bail!("--output-file requires exactly one input after expansion");
+    }
+
     let total = inputs.len();
     let mut jobs = Vec::new();
     let mut skipped_count = 0usize;
@@ -71,7 +76,9 @@ pub fn build_plan(
             continue;
         }
 
-        let output_path = resolve_output_path(input_path, source_root, output_dir, &spec.extension);
+        let output_path = output_file
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| resolve_output_path(input_path, source_root, output_dir, &spec.extension));
 
         let params = resolve_params(&source_info, spec);
 
@@ -184,6 +191,13 @@ fn resolve_params(source: &MediaInfo, spec: &TranscodeSpec) -> EncodeParams {
         height: spec.height.or(src_height),
         frame_rate: spec.frame_rate.or(src_frame_rate),
         pixel_format: spec.pixel_format.clone(),
+        video_filter: spec.video_filter.clone(),
+        video_profile: spec.video_profile.clone(),
+        video_level: spec.video_level.clone(),
+        poster_artwork_path: spec.poster_artwork_path.clone(),
+        hwaccel: spec.hwaccel.clone(),
+        movflags: spec.movflags.clone(),
+        audio_block_size: spec.audio_block_size,
         preserve_artwork: spec.preserve_artwork,
         gapless_trim,
         extra: BTreeMap::new(),

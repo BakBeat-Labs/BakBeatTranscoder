@@ -15,8 +15,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Schema 1.2 — concrete caller specs, plus explicit audio artwork preservation.
-pub const GRAPH_SCHEMA_VERSION: &str = "1.2";
+/// Schema 1.3 — concrete caller video controls for BakBeat-owned device policy.
+pub const GRAPH_SCHEMA_VERSION: &str = "1.3";
 
 /// Whether a node encodes audio-only or a video file (with embedded audio track).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -110,6 +110,27 @@ pub struct EncodeParams {
     /// FFmpeg pixel format string (e.g. "yuv420p"). None = let FFmpeg decide.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pixel_format: Option<String>,
+    /// FFmpeg filter string for the primary output video stream.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_filter: Option<String>,
+    /// FFmpeg profile for the primary output video stream.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_profile: Option<String>,
+    /// FFmpeg level for the primary output video stream.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_level: Option<String>,
+    /// Poster image path to attach as a secondary video stream.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poster_artwork_path: Option<PathBuf>,
+    /// Hardware acceleration method to ask FFmpeg to use while decoding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hwaccel: Option<String>,
+    /// FFmpeg movflags value, e.g. "+faststart".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub movflags: Option<String>,
+    /// FFmpeg audio block size override for legacy muxer/codec combinations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_block_size: Option<u32>,
 
     // ── Gapless trim (AAC/M4A → WAV only) ────────────────────────────────────
     /// When set, the ffmpeg adapter applies `atrim=end_sample={output_frames}`

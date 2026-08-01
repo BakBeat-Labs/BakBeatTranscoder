@@ -9,6 +9,7 @@
 //! adapter, and executes.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use crate::graph::MediaType;
 
@@ -32,6 +33,13 @@ pub struct TranscodeSpec {
     pub height: Option<u32>,
     pub frame_rate: Option<f32>,
     pub pixel_format: Option<String>,
+    pub video_filter: Option<String>,
+    pub video_profile: Option<String>,
+    pub video_level: Option<String>,
+    pub poster_artwork_path: Option<PathBuf>,
+    pub hwaccel: Option<String>,
+    pub movflags: Option<String>,
+    pub audio_block_size: Option<u32>,
 
     /// Preserve embedded cover art/attached pictures for audio outputs.
     /// BakBeat can set this false for device paths that require audio-only
