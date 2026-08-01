@@ -129,6 +129,10 @@ jobs:
           git clone --depth 1 --branch add-libxvid \
             https://github.com/BakBeat-Labs/FFmpeg-arm-silicon.git \
             ffmpeg-arm-silicon
+          VERIFY_CALLS=$(grep -RIl "verify-static-suite" ffmpeg-arm-silicon/scripts)
+          test -n "$VERIFY_CALLS"
+          perl -0pi -e 's@(\n[^\n]*verify-static-suite[^\n]*\n)@\nBBT_SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"\necho "[bbt] deleting Xvid shared libraries before static verification" >&2\nfind "\$BBT_SCRIPT_DIR/../local-static" -name "libxvidcore*.dylib" -print -delete\n$1@' $VERIFY_CALLS
+          grep -R "deleting Xvid shared libraries" -n ffmpeg-arm-silicon/scripts
           mkdir -p ci-bin
           cat > ci-bin/install <<'EOF'
           #!/usr/bin/env bash
