@@ -147,3 +147,22 @@ transcoding/remuxing work that needs structured progress and error reporting.
 
 The public repository carries the MPL-2.0 source and third-party notices so the
 tool boundary stays clear for BakBeat's proprietary app.
+
+## Windows NetMD driver helper
+
+The Windows bundle also carries `bakbeat-netmd-driver.exe`, a Windows-only,
+LGPL-3.0-or-later helper built against a pinned libwdi revision. It is separate
+from the portable Rust `bbt` binary and is not included in macOS or Linux
+archives.
+
+BakBeat owns the supported-device allowlist and invokes the helper only after
+matching a physically connected recorder to an authoritative NetMD profile.
+The helper installs WinUSB only when the exact Windows device-instance ID and
+VID/PID agree, then returns one structured JSON result. Exact instance matching
+prevents one recorder from being substituted for another when identical models
+are attached. It does not expose Zadig's general arbitrary-device user
+interface.
+
+Windows archives include
+`bakbeat-netmd-driver-corresponding-source.zip`, containing this project's
+helper source and the exact libwdi source used to build it.
