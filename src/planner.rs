@@ -13,11 +13,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use sha2::{Digest, Sha256};
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::gapless;
-use crate::graph::{EncodeParams, ExecutionGraph, ExecutionNode, GaplessTrim};
+use crate::graph::{EncodeParams, ExecutionGraph, ExecutionNode, GaplessTrim, SourceFingerprint};
 use crate::probe::{probe_media, AudioInfo, MediaInfo};
 use crate::spec::TranscodeSpec;
 
@@ -28,6 +28,8 @@ pub struct PlannedJob {
     pub output_path: PathBuf,
     pub params: EncodeParams,
     pub assigned_adapter: Option<String>,
+    /// Cheap staleness signal captured from the same probe pass — see `SourceFingerprint`.
+    pub fingerprint: SourceFingerprint,
 }
 
 pub struct TranscodePlan {
@@ -76,17 +78,19 @@ pub fn build_plan(
             continue;
         }
 
-        let output_path = output_file
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| resolve_output_path(input_path, source_root, output_dir, &spec.extension));
+        let output_path = output_file.map(Path::to_path_buf).unwrap_or_else(|| {
+            resolve_output_path(input_path, source_root, output_dir, &spec.extension)
+        });
 
         let params = resolve_params(&source_info, spec);
+        let fingerprint = fingerprint_source(input_path, &source_info)?;
 
         jobs.push(PlannedJob {
             source_path: input_path.clone(),
             output_path,
             params,
             assigned_adapter: None,
+            fingerprint,
         });
     }
 
@@ -106,15 +110,11 @@ pub fn plan_to_graph(plan: &TranscodePlan) -> Result<ExecutionGraph> {
             .clone()
             .expect("adapters must be assigned before building graph");
 
-        let input_sha256 = hash_file(&job.source_path)?;
-        let input_size_bytes = std::fs::metadata(&job.source_path)?.len();
-
         nodes.push(ExecutionNode {
             id: Uuid::new_v4(),
             sequence: seq as u32,
             input_path: job.source_path.clone(),
-            input_sha256,
-            input_size_bytes,
+            input: job.fingerprint.clone(),
             output_path: job.output_path.clone(),
             adapter,
             params: job.params.clone(),
@@ -122,6 +122,22 @@ pub fn plan_to_graph(plan: &TranscodePlan) -> Result<ExecutionGraph> {
     }
 
     Ok(ExecutionGraph::new(nodes))
+}
+
+/// Build a cheap staleness fingerprint from filesystem metadata plus the
+/// probe result already computed for this input — no extra file read.
+fn fingerprint_source(path: &Path, source_info: &MediaInfo) -> Result<SourceFingerprint> {
+    let meta = std::fs::metadata(path)?;
+    let modified_at = meta
+        .modified()
+        .map(DateTime::<Utc>::from)
+        .unwrap_or_else(|_| Utc::now());
+    Ok(SourceFingerprint {
+        size_bytes: meta.len(),
+        modified_at,
+        duration_secs: source_info.duration_secs(),
+        codec_summary: source_info.codec_summary(),
+    })
 }
 
 fn resolve_output_path(
@@ -367,9 +383,4 @@ mod tests {
         let after_trim = ffmpeg_decoded.min(trim.output_frames);
         assert_eq!(after_trim, 11408376, "trimmed count must match afconvert");
     }
-}
-
-fn hash_file(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)?;
-    Ok(hex::encode(Sha256::digest(&bytes)))
 }

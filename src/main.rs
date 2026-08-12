@@ -367,6 +367,7 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
             output_path: n.output_path.clone(),
             params: n.params.clone(),
             assigned_adapter: Some(n.adapter.clone()),
+            fingerprint: n.input.clone(),
         })
         .collect();
     caps.validate_plan(&dummy_jobs)?;
@@ -419,20 +420,24 @@ fn cmd_verify(args: cli::VerifyArgs, json: bool) -> Result<()> {
                 verifier::VerificationStatus::Missing => {
                     println!("  MISSING  {}", r.output_path.display());
                 }
-                verifier::VerificationStatus::HashMismatch { expected, actual } => {
-                    println!(
-                        "  HASH MISMATCH  {} (expected {}, got {})",
-                        r.output_path.display(),
-                        &expected[..16],
-                        &actual[..16]
-                    );
+                verifier::VerificationStatus::Empty => {
+                    println!("  EMPTY  {}", r.output_path.display());
                 }
-                verifier::VerificationStatus::SizeMismatch { expected, actual } => {
+                verifier::VerificationStatus::Unreadable { error } => {
+                    println!("  UNREADABLE  {}: {error}", r.output_path.display());
+                }
+                verifier::VerificationStatus::ShapeMismatch { detail } => {
+                    println!("  SHAPE MISMATCH  {} ({detail})", r.output_path.display());
+                }
+                verifier::VerificationStatus::DurationMismatch {
+                    expected_secs,
+                    actual_secs,
+                } => {
                     println!(
-                        "  SIZE MISMATCH  {} (expected {} bytes, got {})",
+                        "  DURATION MISMATCH  {} (expected {:.1}s, got {:.1}s)",
                         r.output_path.display(),
-                        expected,
-                        actual
+                        expected_secs,
+                        actual_secs
                     );
                 }
                 verifier::VerificationStatus::OriginallyFailed { error } => {
@@ -476,6 +481,7 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
             output_path: n.output_path.clone(),
             params: n.params.clone(),
             assigned_adapter: Some(n.adapter.clone()),
+            fingerprint: n.input.clone(),
         })
         .collect();
 

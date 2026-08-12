@@ -16,14 +16,20 @@ use serde::{Deserialize, Serialize};
 use crate::error::AdapterError;
 use crate::graph::ExecutionNode;
 
-/// Result of a successful encode operation.
+/// Result of a successful encode operation — the facts needed to decide the
+/// output exists, is playable-shaped, and matches what was asked for. Not a
+/// content hash: see `crate::graph::SourceFingerprint` for why.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactInfo {
     pub output_path: PathBuf,
-    pub sha256: String,
     pub size_bytes: u64,
     /// Duration probed from the output file, if available.
     pub duration_ms: Option<u64>,
+    pub container: String,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 /// Trait implemented by all encoder backends.
@@ -50,11 +56,64 @@ pub trait EncoderAdapter: Send + Sync {
     fn encode(&self, node: &ExecutionNode) -> Result<ArtifactInfo, AdapterError>;
 }
 
-/// Compute SHA-256 of a file and return hex string.
-pub(crate) fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
-    use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(path)?;
-    Ok(hex::encode(Sha256::digest(&bytes)))
+/// Build an `ArtifactInfo` by re-probing a freshly encoded output — cheap
+/// header-level facts (container, codec, dimensions, duration), not a
+/// content hash. The hard bar is "exists and nonzero"; shape facts are
+/// best-effort on top of that, since some adapters (ATRAC's .aea/.oma) emit
+/// formats neither Symphonia nor ffprobe parse. A format bbt itself can't
+/// probe is not a failed encode.
+pub(crate) fn probe_output(path: &std::path::Path) -> Result<ArtifactInfo, AdapterError> {
+    let size_bytes = std::fs::metadata(path)?.len();
+    if size_bytes == 0 {
+        return Err(AdapterError::EncodeFailed {
+            path: path.to_path_buf(),
+            stderr: "output file is empty".to_string(),
+        });
+    }
+
+    match crate::probe::probe_media(path) {
+        Ok(info) => {
+            let duration_ms = info.duration_secs().map(|d| (d * 1000.0).round() as u64);
+            let (video_codec, audio_codec, width, height) = match &info {
+                crate::probe::MediaInfo::Audio(a) => (None, Some(a.codec.clone()), None, None),
+                crate::probe::MediaInfo::Video(v) => (
+                    v.video_streams.first().map(|s| s.codec.clone()),
+                    v.audio_streams.first().map(|s| s.codec.clone()),
+                    v.video_streams.first().map(|s| s.width),
+                    v.video_streams.first().map(|s| s.height),
+                ),
+            };
+
+            Ok(ArtifactInfo {
+                output_path: path.to_path_buf(),
+                size_bytes,
+                duration_ms,
+                container: info.container().to_string(),
+                video_codec,
+                audio_codec,
+                width,
+                height,
+            })
+        }
+        Err(e) => {
+            tracing::debug!(path = ?path, error = %e, "post-encode probe skipped: format not parseable by bbt's probers");
+            let container = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default()
+                .to_string();
+            Ok(ArtifactInfo {
+                output_path: path.to_path_buf(),
+                size_bytes,
+                duration_ms: None,
+                container,
+                video_codec: None,
+                audio_codec: None,
+                width: None,
+                height: None,
+            })
+        }
+    }
 }
 
 /// Create parent directories for a path if they don't exist.

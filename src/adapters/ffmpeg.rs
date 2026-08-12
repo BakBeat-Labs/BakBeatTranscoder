@@ -16,7 +16,7 @@ use std::process::Command;
 
 use tracing::{debug, trace};
 
-use crate::adapters::{ensure_parent, sha256_file, ArtifactInfo, EncoderAdapter};
+use crate::adapters::{ensure_parent, probe_output, ArtifactInfo, EncoderAdapter};
 use crate::binaries;
 use crate::error::AdapterError;
 use crate::graph::{ExecutionNode, MediaType};
@@ -275,15 +275,7 @@ impl EncoderAdapter for FfmpegAdapter {
             });
         }
 
-        let size_bytes = std::fs::metadata(&node.output_path)?.len();
-        let sha256 = sha256_file(&node.output_path)?;
-
-        Ok(ArtifactInfo {
-            output_path: node.output_path.clone(),
-            sha256,
-            size_bytes,
-            duration_ms: None,
-        })
+        probe_output(&node.output_path)
     }
 }
 
@@ -307,8 +299,12 @@ mod tests {
             id: Uuid::new_v4(),
             sequence: 0,
             input_path: "/tmp/in.flac".into(),
-            input_sha256: "deadbeef".to_string(),
-            input_size_bytes: 0,
+            input: crate::graph::SourceFingerprint {
+                size_bytes: 0,
+                modified_at: chrono::Utc::now(),
+                duration_secs: None,
+                codec_summary: "test".to_string(),
+            },
             output_path: format!("/tmp/out.{container}").into(),
             adapter: "ffmpeg".to_string(),
             params: EncodeParams {
@@ -345,8 +341,12 @@ mod tests {
             id: Uuid::new_v4(),
             sequence: 0,
             input_path: "/tmp/in.mp4".into(),
-            input_sha256: "deadbeef".to_string(),
-            input_size_bytes: 0,
+            input: crate::graph::SourceFingerprint {
+                size_bytes: 0,
+                modified_at: chrono::Utc::now(),
+                duration_secs: None,
+                codec_summary: "test".to_string(),
+            },
             output_path: "/tmp/out.avi".into(),
             adapter: "ffmpeg".to_string(),
             params: EncodeParams {
@@ -456,7 +456,10 @@ mod tests {
         let args = adapter.build_args(&gpx_mt861b_video_node()).unwrap();
 
         assert_eq!(windows_containing(&args, "-c:v:0"), Some("libxvid"));
-        assert_eq!(windows_containing(&args, "-filter:v:0"), Some("scale=320:240"));
+        assert_eq!(
+            windows_containing(&args, "-filter:v:0"),
+            Some("scale=320:240")
+        );
         assert_eq!(windows_containing(&args, "-r:v:0"), Some("20"));
         assert_eq!(windows_containing(&args, "-b:v:0"), Some("256k"));
         assert_eq!(windows_containing(&args, "-codec:a"), Some("libmp3lame"));
@@ -486,7 +489,9 @@ mod tests {
         let args = adapter.build_args(&node).unwrap();
 
         assert_eq!(windows_containing(&args, "-hwaccel"), Some("videotoolbox"));
-        assert!(args.windows(2).any(|w| w[0] == "-i" && w[1] == "/tmp/poster.jpg"));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "-i" && w[1] == "/tmp/poster.jpg"));
         assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v:0"));
         assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:a?"));
         assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "1:v:0"));
@@ -497,7 +502,10 @@ mod tests {
         assert_eq!(windows_containing(&args, "-f"), Some("ipod"));
         assert_eq!(windows_containing(&args, "-movflags"), Some("+faststart"));
         assert_eq!(windows_containing(&args, "-c:v:1"), Some("copy"));
-        assert_eq!(windows_containing(&args, "-disposition:v:1"), Some("attached_pic"));
+        assert_eq!(
+            windows_containing(&args, "-disposition:v:1"),
+            Some("attached_pic")
+        );
     }
 
     #[test]

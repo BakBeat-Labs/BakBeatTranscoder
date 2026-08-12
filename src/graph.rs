@@ -15,8 +15,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Schema 1.3 — concrete caller video controls for BakBeat-owned device policy.
-pub const GRAPH_SCHEMA_VERSION: &str = "1.3";
+/// Schema 1.4 — source identity is a cheap staleness fingerprint (size/mtime/
+/// probed shape) instead of a full-file SHA-256. bbt produces device-friendly
+/// derivatives, not archival copies; hashing gigabytes of source video before
+/// every encode was pure overhead for that job. See `SourceFingerprint`.
+pub const GRAPH_SCHEMA_VERSION: &str = "1.4";
 
 /// Whether a node encodes audio-only or a video file (with embedded audio track).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -59,14 +62,47 @@ pub struct ExecutionNode {
     /// Stable ordering index within the graph (for reproducible sequential execution)
     pub sequence: u32,
     pub input_path: PathBuf,
-    /// SHA-256 hex of the input file at plan time.
-    /// If this changes before execution, the run should be considered tainted.
-    pub input_sha256: String,
-    pub input_size_bytes: u64,
+    /// Cheap facts about the source at plan time, used to detect whether the
+    /// plan has gone stale before execution. Not a content hash.
+    pub input: SourceFingerprint,
     pub output_path: PathBuf,
     /// Which adapter handles this node (e.g. "ffmpeg", "atrac")
     pub adapter: String,
     pub params: EncodeParams,
+}
+
+/// A cheap, non-cryptographic signal that a source file changed since plan
+/// time — size, mtime, and the probed shape (duration + codec summary).
+///
+/// Deliberately not a content hash: bbt transcodes device-friendly derivatives
+/// for daily use, not archival copies, and hashing a multi-gigabyte 4K source
+/// before every encode is wasted I/O and RAM pressure for that job. If a
+/// caller needs cryptographic provenance of a source file, that's a job for a
+/// dedicated tool outside bbt's hot path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SourceFingerprint {
+    pub size_bytes: u64,
+    pub modified_at: DateTime<Utc>,
+    pub duration_secs: Option<f64>,
+    pub codec_summary: String,
+}
+
+impl SourceFingerprint {
+    /// Re-check against the current filesystem state. False if the file is
+    /// gone, or its size/mtime drifted from what was recorded at plan time.
+    pub fn still_matches(&self, path: &std::path::Path) -> bool {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return false;
+        };
+        if meta.len() != self.size_bytes {
+            return false;
+        }
+        match meta.modified() {
+            Ok(m) => DateTime::<Utc>::from(m) == self.modified_at,
+            // Platform/filesystem doesn't report mtime — size match is all we can do.
+            Err(_) => true,
+        }
+    }
 }
 
 /// Fully resolved encoding parameters. All audio fields are always present.

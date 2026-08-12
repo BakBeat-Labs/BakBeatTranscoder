@@ -131,6 +131,49 @@ impl MediaInfo {
             _ => false,
         }
     }
+
+    pub fn duration_secs(&self) -> Option<f64> {
+        match self {
+            MediaInfo::Audio(a) => a.duration_secs,
+            MediaInfo::Video(v) => v.duration_secs,
+        }
+    }
+
+    pub fn container(&self) -> &str {
+        match self {
+            MediaInfo::Audio(a) => &a.container,
+            MediaInfo::Video(v) => &v.container,
+        }
+    }
+
+    /// Primary video dimensions, if this is a video file with a video stream.
+    pub fn dimensions(&self) -> Option<(u32, u32)> {
+        match self {
+            MediaInfo::Audio(_) => None,
+            MediaInfo::Video(v) => v.video_streams.first().map(|s| (s.width, s.height)),
+        }
+    }
+
+    /// Short, cheap codec fingerprint — e.g. `"aac"` or `"hevc+aac"`.
+    /// Used for shape/staleness comparisons, not content identity.
+    pub fn codec_summary(&self) -> String {
+        match self {
+            MediaInfo::Audio(a) => a.codec.clone(),
+            MediaInfo::Video(v) => {
+                let vcodec = v
+                    .video_streams
+                    .first()
+                    .map(|s| s.codec.as_str())
+                    .unwrap_or("none");
+                let acodec = v
+                    .audio_streams
+                    .first()
+                    .map(|s| s.codec.as_str())
+                    .unwrap_or("none");
+                format!("{vcodec}+{acodec}")
+            }
+        }
+    }
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────

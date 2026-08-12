@@ -157,6 +157,12 @@ mod tests {
             source_path: "/tmp/in.mp4".into(),
             output_path: "/tmp/out.avi".into(),
             assigned_adapter: None,
+            fingerprint: crate::graph::SourceFingerprint {
+                size_bytes: 0,
+                modified_at: chrono::Utc::now(),
+                duration_secs: None,
+                codec_summary: "test".to_string(),
+            },
             params: EncodeParams {
                 media_type: MediaType::Video,
                 container: "avi".to_string(),

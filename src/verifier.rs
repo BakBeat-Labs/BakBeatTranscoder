@@ -5,10 +5,17 @@
 //! Artifact verifier and TranscodeManifest.
 //!
 //! Every execution produces a manifest. The manifest is the ground truth
-//! record of what was produced: paths, hashes, sizes, timestamps.
+//! record of what was produced: paths, sizes, shapes, timestamps.
 //! `bbt verify <manifest.json>` re-checks all artifacts at any future point.
 //! `bbt resume <manifest.json>` re-encodes anything that failed or drifted.
+//!
+//! bbt produces device-friendly derivatives, not archival copies. Artifact
+//! validity is judged the way a build system judges an artifact: does the
+//! output exist, is it playable-shaped (right container/codec/dimensions),
+//! and is its duration sane relative to the source — not "does its content
+//! hash match byte-for-byte". See `crate::graph::SourceFingerprint`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -17,9 +24,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::BbtError;
-use crate::graph::ExecutionGraph;
+use crate::graph::{ExecutionGraph, ExecutionNode};
+use crate::probe::probe_media;
 
-pub const MANIFEST_SCHEMA_VERSION: &str = "1.0";
+pub const MANIFEST_SCHEMA_VERSION: &str = "2.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscodeManifest {
@@ -37,14 +45,24 @@ pub struct TranscodeManifest {
     pub artifacts: Vec<ArtifactRecord>,
 }
 
+/// The facts recorded about a produced artifact — build-artifact facts, not
+/// archival provenance. Enough to tell a device file exists and is
+/// playable-shaped; not a promise the bytes never changed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactRecord {
     pub node_id: Uuid,
     pub output_path: PathBuf,
-    /// SHA-256 hex of the output file at encode time.
-    pub sha256: String,
     pub size_bytes: u64,
     pub duration_ms: Option<u64>,
+    pub container: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_codec: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_codec: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
     pub encode_elapsed_ms: u64,
     pub verified_at: Option<DateTime<Utc>>,
     pub status: ArtifactStatus,
@@ -82,9 +100,26 @@ pub struct VerificationResult {
 pub enum VerificationStatus {
     Ok,
     Missing,
-    HashMismatch { expected: String, actual: String },
-    SizeMismatch { expected: u64, actual: u64 },
-    OriginallyFailed { error: String },
+    /// File exists but is zero bytes.
+    Empty,
+    /// File exists and is nonzero, but bbt's probers couldn't parse it as
+    /// media at all (distinct from an intentionally unprobeable format like
+    /// ATRAC — this means it failed to open, e.g. truncated/corrupt).
+    Unreadable {
+        error: String,
+    },
+    /// Container/codec/dimensions drifted from what was recorded at encode time.
+    ShapeMismatch {
+        detail: String,
+    },
+    /// Output duration is not close to the source duration recorded at plan time.
+    DurationMismatch {
+        expected_secs: f64,
+        actual_secs: f64,
+    },
+    OriginallyFailed {
+        error: String,
+    },
     CarriedForward,
 }
 
@@ -151,8 +186,12 @@ impl TranscodeManifest {
         })
     }
 
-    /// Re-verify all artifacts against their recorded hashes.
+    /// Re-verify all artifacts: existence, shape, and duration sanity against
+    /// the source facts recorded in the graph at plan time.
     pub fn verify(&self) -> Vec<VerificationResult> {
+        let nodes: HashMap<Uuid, &ExecutionNode> =
+            self.graph.nodes.iter().map(|n| (n.id, n)).collect();
+
         self.artifacts
             .iter()
             .map(|record| {
@@ -164,13 +203,15 @@ impl TranscodeManifest {
                         error: "skipped".to_string(),
                     },
                     ArtifactStatus::CarriedForward { .. } => {
-                        // Re-verify the file is still intact
-                        match check_artifact_integrity(record) {
-                            true => VerificationStatus::CarriedForward,
-                            false => VerificationStatus::Missing,
+                        if artifact_still_valid(record) {
+                            VerificationStatus::CarriedForward
+                        } else {
+                            VerificationStatus::Missing
                         }
                     }
-                    ArtifactStatus::Success => check_artifact(record),
+                    ArtifactStatus::Success => {
+                        check_artifact(record, nodes.get(&record.node_id).copied())
+                    }
                 };
                 VerificationResult {
                     node_id: record.node_id,
@@ -182,52 +223,85 @@ impl TranscodeManifest {
     }
 }
 
-/// Check whether a previously successful artifact is still valid on disk.
-/// Returns true only if the file exists AND the SHA-256 still matches.
-/// Any doubt → false → re-encode.
+/// Whether a previously successful artifact still looks usable on disk:
+/// exists, nonzero, and (best-effort) still probes to the recorded shape.
+/// Any doubt → false → the caller re-encodes rather than trusting a maybe.
 pub fn artifact_still_valid(record: &ArtifactRecord) -> bool {
-    check_artifact_integrity(record)
-}
-
-fn check_artifact_integrity(record: &ArtifactRecord) -> bool {
-    if !record.output_path.exists() {
+    let Ok(meta) = std::fs::metadata(&record.output_path) else {
+        return false;
+    };
+    if meta.len() == 0 {
         return false;
     }
-    match compute_sha256(&record.output_path) {
-        Ok(hash) => hash == record.sha256,
-        Err(_) => false,
+    match probe_media(&record.output_path) {
+        Ok(probed) => probed.container().eq_ignore_ascii_case(&record.container),
+        // Unparseable by bbt's own probers (e.g. ATRAC) isn't itself a failure —
+        // fall back to "exists and nonzero", which is all we recorded for it originally.
+        Err(_) => record.video_codec.is_none() && record.audio_codec.is_none(),
     }
 }
 
-fn check_artifact(record: &ArtifactRecord) -> VerificationStatus {
-    if !record.output_path.exists() {
-        return VerificationStatus::Missing;
-    }
+/// Duration tolerance: 5% of the expected length, or 2s, whichever is larger.
+/// Loose on purpose — this is a sanity check against truncated/wrong-track
+/// outputs, not a frame-accurate comparison.
+fn duration_tolerance_secs(expected_secs: f64) -> f64 {
+    (expected_secs * 0.05).max(2.0)
+}
 
+fn check_artifact(record: &ArtifactRecord, node: Option<&ExecutionNode>) -> VerificationStatus {
     let meta = match std::fs::metadata(&record.output_path) {
         Ok(m) => m,
         Err(_) => return VerificationStatus::Missing,
     };
+    if meta.len() == 0 {
+        return VerificationStatus::Empty;
+    }
 
-    if meta.len() != record.size_bytes {
-        return VerificationStatus::SizeMismatch {
-            expected: record.size_bytes,
-            actual: meta.len(),
+    let probed = match probe_media(&record.output_path) {
+        Ok(p) => p,
+        Err(e) => {
+            // Formats bbt can't parse at all (ATRAC's .aea/.oma) were never
+            // shape-checked to begin with — exists + nonzero is the whole bar.
+            if record.video_codec.is_none() && record.audio_codec.is_none() {
+                return VerificationStatus::Ok;
+            }
+            return VerificationStatus::Unreadable {
+                error: e.to_string(),
+            };
+        }
+    };
+
+    if !probed.container().eq_ignore_ascii_case(&record.container) {
+        return VerificationStatus::ShapeMismatch {
+            detail: format!(
+                "container: expected {}, found {}",
+                record.container,
+                probed.container()
+            ),
         };
     }
 
-    match compute_sha256(&record.output_path) {
-        Ok(hash) if hash == record.sha256 => VerificationStatus::Ok,
-        Ok(hash) => VerificationStatus::HashMismatch {
-            expected: record.sha256.clone(),
-            actual: hash,
-        },
-        Err(_) => VerificationStatus::Missing,
+    if let (Some((rec_w, rec_h)), Some((w, h))) =
+        (record.width.zip(record.height), probed.dimensions())
+    {
+        if (rec_w, rec_h) != (w, h) {
+            return VerificationStatus::ShapeMismatch {
+                detail: format!("dimensions: expected {rec_w}x{rec_h}, found {w}x{h}"),
+            };
+        }
     }
-}
 
-fn compute_sha256(path: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(path)?;
-    Ok(hex::encode(Sha256::digest(&bytes)))
+    if let (Some(node), Some(actual_secs)) = (node, probed.duration_secs()) {
+        if let Some(expected_secs) = node.input.duration_secs {
+            let tolerance = duration_tolerance_secs(expected_secs);
+            if (actual_secs - expected_secs).abs() > tolerance {
+                return VerificationStatus::DurationMismatch {
+                    expected_secs,
+                    actual_secs,
+                };
+            }
+        }
+    }
+
+    VerificationStatus::Ok
 }

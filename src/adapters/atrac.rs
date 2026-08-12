@@ -22,7 +22,7 @@ use std::process::Command;
 use tempfile::TempDir;
 use tracing::{debug, trace};
 
-use crate::adapters::{ensure_parent, sha256_file, ArtifactInfo, EncoderAdapter};
+use crate::adapters::{ensure_parent, probe_output, ArtifactInfo, EncoderAdapter};
 use crate::binaries;
 use crate::error::AdapterError;
 use crate::graph::ExecutionNode;
@@ -176,15 +176,7 @@ impl EncoderAdapter for AtracAdapter {
 
         // tmp_dir drops here, cleaning up the intermediate WAV
 
-        let size_bytes = std::fs::metadata(&node.output_path)?.len();
-        let sha256 = sha256_file(&node.output_path)?;
-
-        Ok(ArtifactInfo {
-            output_path: node.output_path.clone(),
-            sha256,
-            size_bytes,
-            duration_ms: None,
-        })
+        probe_output(&node.output_path)
     }
 }
 

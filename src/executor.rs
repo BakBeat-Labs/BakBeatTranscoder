@@ -77,9 +77,13 @@ pub fn execute_graph(
                 ArtifactRecord {
                     node_id: node.id,
                     output_path: info.output_path,
-                    sha256: info.sha256,
                     size_bytes: info.size_bytes,
                     duration_ms: info.duration_ms,
+                    container: info.container,
+                    video_codec: info.video_codec,
+                    audio_codec: info.audio_codec,
+                    width: info.width,
+                    height: info.height,
                     encode_elapsed_ms: elapsed_ms,
                     verified_at: Some(chrono::Utc::now()),
                     status: ArtifactStatus::Success,
@@ -110,9 +114,13 @@ pub fn execute_graph(
                 ArtifactRecord {
                     node_id: node.id,
                     output_path: node.output_path.clone(),
-                    sha256: String::new(),
                     size_bytes: 0,
                     duration_ms: None,
+                    container: String::new(),
+                    video_codec: None,
+                    audio_codec: None,
+                    width: None,
+                    height: None,
                     encode_elapsed_ms: elapsed_ms,
                     verified_at: None,
                     status: ArtifactStatus::Failed {
@@ -146,8 +154,9 @@ pub fn execute_graph(
 /// Resume a previously failed or incomplete run.
 ///
 /// For each node in the original graph:
-///   - If its artifact was successful AND the output file is still intact
-///     (SHA-256 matches) → carry it forward, do not re-encode.
+///   - If its artifact was successful AND the output still looks intact
+///     (exists, nonzero, expected shape) AND the source hasn't changed since
+///     plan time (size/mtime) → carry it forward, do not re-encode.
 ///   - Otherwise → re-encode.
 ///
 /// Produces a new manifest with `resumed_from` set to the original manifest_id.
@@ -170,7 +179,7 @@ pub fn resume_graph(
         let prior_record = prior_artifacts.get(&node.id);
         let is_valid = prior_record
             .filter(|r| r.status.is_good())
-            .map(|r| artifact_still_valid(r))
+            .map(|r| artifact_still_valid(r) && node.input.still_matches(&node.input_path))
             .unwrap_or(false);
 
         if is_valid {
@@ -239,9 +248,13 @@ pub fn resume_graph(
                 ArtifactRecord {
                     node_id: node.id,
                     output_path: info.output_path,
-                    sha256: info.sha256,
                     size_bytes: info.size_bytes,
                     duration_ms: info.duration_ms,
+                    container: info.container,
+                    video_codec: info.video_codec,
+                    audio_codec: info.audio_codec,
+                    width: info.width,
+                    height: info.height,
                     encode_elapsed_ms: elapsed_ms,
                     verified_at: Some(chrono::Utc::now()),
                     status: ArtifactStatus::Success,
@@ -272,9 +285,13 @@ pub fn resume_graph(
                 ArtifactRecord {
                     node_id: node.id,
                     output_path: node.output_path.clone(),
-                    sha256: String::new(),
                     size_bytes: 0,
                     duration_ms: None,
+                    container: String::new(),
+                    video_codec: None,
+                    audio_codec: None,
+                    width: None,
+                    height: None,
                     encode_elapsed_ms: elapsed_ms,
                     verified_at: None,
                     status: ArtifactStatus::Failed {
