@@ -1,0 +1,68 @@
+{
+  "schema_version": "2.0",
+  "manifest_id": "44bcefdf-fc13-4438-9664-b5b8bf9de5ab",
+  "completed_at": "2026-08-12T18:53:15.090227Z",
+  "total_elapsed_ms": 3887,
+  "success_count": 1,
+  "failure_count": 0,
+  "carried_forward_count": 0,
+  "graph": {
+    "schema_version": "1.4",
+    "graph_id": "71f32e83-d047-4b2a-b741-9d302abbbb63",
+    "created_at": "2026-08-12T18:53:11.202241Z",
+    "graph_hash": "00a0dae48426b1fd4a661764496994ee6c6221daeda3b199c6a1e24842de75fd",
+    "nodes": [
+      {
+        "id": "68361ae5-cc28-4fea-940c-7a76b03ba978",
+        "sequence": 0,
+        "input_path": "/Volumes/Data/CodexAgentScratch/hackers-real-hdr-sample.mkv",
+        "input": {
+          "size_bytes": 65096701,
+          "modified_at": "2026-08-12T18:51:15.269520392Z",
+          "duration_secs": 20.124,
+          "codec_summary": "hevc+dts"
+        },
+        "output_path": "/Volumes/Data/CodexAgentScratch/hackers-nano-bt709-test.m4v",
+        "adapter": "ffmpeg",
+        "params": {
+          "media_type": "video",
+          "container": "ipod",
+          "extension": "m4v",
+          "cbr": true,
+          "audio_codec": "aac",
+          "audio_bitrate_kbps": 256,
+          "sample_rate_hz": 48000,
+          "channels": 2,
+          "preserve_artwork": true,
+          "video_codec": "h264_avc",
+          "width": 720,
+          "height": 576,
+          "frame_rate": 30.0,
+          "pixel_format": "yuv420p",
+          "video_filter": "scale=720:576:force_original_aspect_ratio=decrease:force_divisible_by=16",
+          "video_profile": "high",
+          "video_level": "3.0",
+          "movflags": "+faststart"
+        }
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "node_id": "68361ae5-cc28-4fea-940c-7a76b03ba978",
+      "output_path": "/Volumes/Data/CodexAgentScratch/hackers-nano-bt709-test.m4v",
+      "size_bytes": 1360325,
+      "duration_ms": 20133,
+      "container": "mov",
+      "video_codec": "h264",
+      "audio_codec": "aac",
+      "width": 720,
+      "height": 400,
+      "encode_elapsed_ms": 3887,
+      "verified_at": "2026-08-12T18:53:15.090217Z",
+      "status": {
+        "type": "success"
+      }
+    }
+  ]
+}

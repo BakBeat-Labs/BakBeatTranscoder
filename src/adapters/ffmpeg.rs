@@ -11,7 +11,7 @@
 //! Licensing note: calling FFmpeg as a subprocess does not create a derivative
 //! work under LGPL/GPL. Our MPL-2.0 code and FFmpeg remain separate programs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tracing::{debug, trace};
@@ -49,6 +49,14 @@ impl FfmpegAdapter {
     }
 
     fn build_args(&self, node: &ExecutionNode) -> Result<Vec<String>, AdapterError> {
+        self.build_args_with_output(node, &node.output_path)
+    }
+
+    fn build_args_with_output(
+        &self,
+        node: &ExecutionNode,
+        output_path: &Path,
+    ) -> Result<Vec<String>, AdapterError> {
         let p = &node.params;
         let mut args: Vec<String> = Vec::new();
 
@@ -70,12 +78,14 @@ impl FfmpegAdapter {
             ]);
             if let Some(poster_path) = &p.poster_artwork_path {
                 let _ = poster_path;
-                args.extend([
-                    "-map".into(),
-                    "1:v:0".into(),
-                ]);
+                args.extend(["-map".into(), "1:v:0".into()]);
             }
-            args.extend(["-sn".into(), "-dn".into(), "-map_chapters".into(), "-1".into()]);
+            args.extend([
+                "-sn".into(),
+                "-dn".into(),
+                "-map_chapters".into(),
+                "-1".into(),
+            ]);
         }
 
         // Audio-only output: map the audio track plus any embedded cover art
@@ -116,20 +126,40 @@ impl FfmpegAdapter {
         if p.media_type == MediaType::Video {
             if let Some(vcodec) = &p.video_codec {
                 args.extend(["-c:v:0".into(), codec_to_ffmpeg(vcodec)?.into()]);
+                if h264_bitstream_needs_legacy_sei_strip(vcodec) {
+                    args.extend(["-bsf:v:0".into(), "filter_units=remove_types=6".into()]);
+                }
             }
             if let Some(vbr) = p.video_bitrate_kbps {
                 args.extend(["-b:v:0".into(), format!("{vbr}k")]);
             }
-            if let Some(filter) = &p.video_filter {
-                args.extend(["-filter:v:0".into(), filter.clone()]);
-            } else if let (Some(w), Some(h)) = (p.width, p.height) {
-                args.extend(["-filter:v:0".into(), format!("scale={w}:{h}")]);
+            let base_video_filter = p.video_filter.clone().or_else(|| {
+                if let (Some(w), Some(h)) = (p.width, p.height) {
+                    Some(format!("scale={w}:{h}"))
+                } else {
+                    None
+                }
+            });
+            let video_filter =
+                video_filter_with_legacy_sdr_tags(base_video_filter, p.pixel_format.as_deref());
+            if let Some(filter) = video_filter {
+                args.extend(["-filter:v:0".into(), filter]);
             }
             if let Some(fps) = p.frame_rate {
                 args.extend(["-r:v:0".into(), fps.to_string()]);
             }
             if let Some(pf) = &p.pixel_format {
                 args.extend(["-pix_fmt:v:0".into(), pf.clone()]);
+                if pf == "yuv420p" {
+                    args.extend([
+                        "-colorspace:v:0".into(),
+                        "bt709".into(),
+                        "-color_trc:v:0".into(),
+                        "bt709".into(),
+                        "-color_primaries:v:0".into(),
+                        "bt709".into(),
+                    ]);
+                }
             }
             if let Some(profile) = &p.video_profile {
                 args.extend(["-profile:v:0".into(), profile.clone()]);
@@ -209,9 +239,59 @@ impl FfmpegAdapter {
             }
         }
 
-        args.push(node.output_path.to_string_lossy().into_owned());
+        args.push(output_path.to_string_lossy().into_owned());
 
         Ok(args)
+    }
+
+    fn run_ffmpeg(&self, args: &[String], path: &Path) -> Result<(), AdapterError> {
+        trace!(binary = ?self.binary, ?args, "running ffmpeg");
+
+        let output = Command::new(&self.binary)
+            .args(args)
+            .output()
+            .map_err(AdapterError::Io)?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            debug!(stderr = %stderr, "ffmpeg failed");
+            return Err(AdapterError::EncodeFailed {
+                path: path.to_path_buf(),
+                stderr,
+            });
+        }
+
+        Ok(())
+    }
+
+    fn encode_with_rebuilt_aac_timing(
+        &self,
+        node: &ExecutionNode,
+    ) -> Result<ArtifactInfo, AdapterError> {
+        let parent = node
+            .output_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let temp_dir = tempfile::Builder::new()
+            .prefix(".bbt-ffmpeg-")
+            .tempdir_in(parent)
+            .map_err(AdapterError::Io)?;
+        let primary_output = temp_dir
+            .path()
+            .join(format!("primary.{}", node.params.extension));
+        let rebuilt_audio = temp_dir.path().join("rebuilt-audio.aac");
+
+        let primary_args = self.build_args_with_output(node, &primary_output)?;
+        self.run_ffmpeg(&primary_args, &primary_output)?;
+
+        let rebuild_audio_args =
+            build_rebuild_aac_audio_args(node, &primary_output, &rebuilt_audio);
+        self.run_ffmpeg(&rebuild_audio_args, &primary_output)?;
+
+        let final_mux_args = build_final_aac_timing_mux_args(node, &primary_output, &rebuilt_audio);
+        self.run_ffmpeg(&final_mux_args, &node.output_path)?;
+
+        probe_output(&node.output_path)
     }
 }
 
@@ -264,25 +344,106 @@ impl EncoderAdapter for FfmpegAdapter {
     fn encode(&self, node: &ExecutionNode) -> Result<ArtifactInfo, AdapterError> {
         ensure_parent(&node.output_path)?;
 
-        let args = self.build_args(node)?;
-        trace!(binary = ?self.binary, ?args, "running ffmpeg");
-
-        let output = Command::new(&self.binary)
-            .args(&args)
-            .output()
-            .map_err(AdapterError::Io)?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            debug!(stderr = %stderr, "ffmpeg failed");
-            return Err(AdapterError::EncodeFailed {
-                path: node.input_path.clone(),
-                stderr,
-            });
+        if video_aac_output_needs_timing_rebuild(node) {
+            return self.encode_with_rebuilt_aac_timing(node);
         }
+
+        let args = self.build_args(node)?;
+        self.run_ffmpeg(&args, &node.input_path)?;
 
         probe_output(&node.output_path)
     }
+}
+
+fn video_aac_output_needs_timing_rebuild(node: &ExecutionNode) -> bool {
+    let p = &node.params;
+    p.media_type == MediaType::Video
+        && p.audio_codec == "aac"
+        && matches!(p.container.as_str(), "ipod" | "mp4" | "mov")
+}
+
+fn build_rebuild_aac_audio_args(
+    node: &ExecutionNode,
+    primary_output: &Path,
+    rebuilt_audio: &Path,
+) -> Vec<String> {
+    let p = &node.params;
+    let mut args = vec![
+        "-y".to_string(),
+        "-i".to_string(),
+        primary_output.to_string_lossy().into_owned(),
+        "-map".to_string(),
+        "0:a:0".to_string(),
+        "-vn".to_string(),
+        "-c:a".to_string(),
+        "aac".to_string(),
+    ];
+
+    if let Some(kbps) = p.audio_bitrate_kbps {
+        args.extend(["-b:a".to_string(), format!("{kbps}k")]);
+    }
+
+    args.extend([
+        "-ar".to_string(),
+        p.sample_rate_hz.to_string(),
+        "-ac".to_string(),
+        p.channels.to_string(),
+        "-af".to_string(),
+        "asetpts=N/SR/TB".to_string(),
+        "-f".to_string(),
+        "adts".to_string(),
+        rebuilt_audio.to_string_lossy().into_owned(),
+    ]);
+
+    args
+}
+
+fn build_final_aac_timing_mux_args(
+    node: &ExecutionNode,
+    primary_output: &Path,
+    rebuilt_audio: &Path,
+) -> Vec<String> {
+    let p = &node.params;
+    let mut args = vec![
+        "-y".to_string(),
+        "-i".to_string(),
+        primary_output.to_string_lossy().into_owned(),
+        "-i".to_string(),
+        rebuilt_audio.to_string_lossy().into_owned(),
+        "-map".to_string(),
+        "0:v:0".to_string(),
+        "-map".to_string(),
+        "1:a:0".to_string(),
+    ];
+
+    if p.poster_artwork_path.is_some() {
+        args.extend([
+            "-map".to_string(),
+            "0:v:1?".to_string(),
+            "-disposition:v:1".to_string(),
+            "attached_pic".to_string(),
+        ]);
+    }
+
+    args.extend([
+        "-sn".to_string(),
+        "-dn".to_string(),
+        "-c".to_string(),
+        "copy".to_string(),
+        "-map_metadata".to_string(),
+        "-1".to_string(),
+        "-map_chapters".to_string(),
+        "-1".to_string(),
+        "-f".to_string(),
+        p.container.clone(),
+    ]);
+
+    if let Some(movflags) = &p.movflags {
+        args.extend(["-movflags".to_string(), movflags.clone()]);
+    }
+
+    args.push(node.output_path.to_string_lossy().into_owned());
+    args
 }
 
 #[cfg(test)]
@@ -391,7 +552,8 @@ mod tests {
     }
 
     fn index_of_window(args: &[String], first: &str, second: &str) -> Option<usize> {
-        args.windows(2).position(|w| w[0] == first && w[1] == second)
+        args.windows(2)
+            .position(|w| w[0] == first && w[1] == second)
     }
 
     #[test]
@@ -517,9 +679,23 @@ mod tests {
         assert!(args.contains(&"-dn".to_string()));
         assert_eq!(windows_containing(&args, "-map_chapters"), Some("-1"));
         assert_eq!(windows_containing(&args, "-c:v:0"), Some("libx264"));
+        assert_eq!(
+            windows_containing(&args, "-bsf:v:0"),
+            Some("filter_units=remove_types=6")
+        );
         assert_eq!(windows_containing(&args, "-profile:v:0"), Some("baseline"));
         assert_eq!(windows_containing(&args, "-level:v:0"), Some("3.0"));
         assert_eq!(windows_containing(&args, "-pix_fmt:v:0"), Some("yuv420p"));
+        assert_eq!(
+            windows_containing(&args, "-filter:v:0"),
+            Some("scale=320:240:force_original_aspect_ratio=decrease:force_divisible_by=16,setparams=colorspace=bt709:color_trc=bt709:color_primaries=bt709")
+        );
+        assert_eq!(windows_containing(&args, "-colorspace:v:0"), Some("bt709"));
+        assert_eq!(windows_containing(&args, "-color_trc:v:0"), Some("bt709"));
+        assert_eq!(
+            windows_containing(&args, "-color_primaries:v:0"),
+            Some("bt709")
+        );
         assert_eq!(windows_containing(&args, "-f"), Some("ipod"));
         assert_eq!(windows_containing(&args, "-movflags"), Some("+faststart"));
         assert_eq!(windows_containing(&args, "-c:v:1"), Some("copy"));
@@ -527,6 +703,86 @@ mod tests {
             windows_containing(&args, "-disposition:v:1"),
             Some("attached_pic")
         );
+    }
+
+    #[test]
+    fn legacy_mp4_aac_video_outputs_rebuild_audio_timing() {
+        let mut node = gpx_mt861b_video_node();
+        node.output_path = "/tmp/out.m4v".into();
+        node.params.container = "ipod".to_string();
+        node.params.extension = "m4v".to_string();
+        node.params.audio_codec = "aac".to_string();
+
+        assert!(video_aac_output_needs_timing_rebuild(&node));
+
+        node.params.audio_codec = "mp3".to_string();
+        assert!(!video_aac_output_needs_timing_rebuild(&node));
+
+        node.params.audio_codec = "aac".to_string();
+        node.params.container = "avi".to_string();
+        assert!(!video_aac_output_needs_timing_rebuild(&node));
+    }
+
+    #[test]
+    fn rebuilt_aac_audio_args_force_fresh_sample_timestamps() {
+        let mut node = gpx_mt861b_video_node();
+        node.params.audio_codec = "aac".to_string();
+        node.params.audio_bitrate_kbps = Some(224);
+        node.params.sample_rate_hz = 48000;
+        node.params.channels = 2;
+
+        let args = build_rebuild_aac_audio_args(
+            &node,
+            std::path::Path::new("/tmp/primary.m4v"),
+            std::path::Path::new("/tmp/rebuilt.aac"),
+        );
+
+        assert_eq!(windows_containing(&args, "-map"), Some("0:a:0"));
+        assert!(args.contains(&"-vn".to_string()));
+        assert_eq!(windows_containing(&args, "-c:a"), Some("aac"));
+        assert_eq!(windows_containing(&args, "-b:a"), Some("224k"));
+        assert_eq!(windows_containing(&args, "-ar"), Some("48000"));
+        assert_eq!(windows_containing(&args, "-ac"), Some("2"));
+        assert_eq!(windows_containing(&args, "-af"), Some("asetpts=N/SR/TB"));
+        assert_eq!(windows_containing(&args, "-f"), Some("adts"));
+        assert_eq!(args.last().map(String::as_str), Some("/tmp/rebuilt.aac"));
+    }
+
+    #[test]
+    fn final_aac_timing_mux_copies_video_and_rebuilt_audio() {
+        let mut node = gpx_mt861b_video_node();
+        node.output_path = "/tmp/out.m4v".into();
+        node.params.container = "ipod".to_string();
+        node.params.extension = "m4v".to_string();
+        node.params.audio_codec = "aac".to_string();
+        node.params.poster_artwork_path = Some("/tmp/poster.jpg".into());
+        node.params.movflags = Some("+faststart".to_string());
+
+        let args = build_final_aac_timing_mux_args(
+            &node,
+            std::path::Path::new("/tmp/primary.m4v"),
+            std::path::Path::new("/tmp/rebuilt.aac"),
+        );
+
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "-i" && w[1] == "/tmp/primary.m4v"));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "-i" && w[1] == "/tmp/rebuilt.aac"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v:0"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "1:a:0"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v:1?"));
+        assert_eq!(
+            windows_containing(&args, "-disposition:v:1"),
+            Some("attached_pic")
+        );
+        assert_eq!(windows_containing(&args, "-c"), Some("copy"));
+        assert_eq!(windows_containing(&args, "-map_metadata"), Some("-1"));
+        assert_eq!(windows_containing(&args, "-map_chapters"), Some("-1"));
+        assert_eq!(windows_containing(&args, "-f"), Some("ipod"));
+        assert_eq!(windows_containing(&args, "-movflags"), Some("+faststart"));
+        assert_eq!(args.last().map(String::as_str), Some("/tmp/out.m4v"));
     }
 
     #[test]
@@ -587,6 +843,24 @@ fn encoders_list_has_libxvid(stdout: &str) -> bool {
     stdout
         .lines()
         .any(|line| line.split_whitespace().nth(1) == Some("libxvid"))
+}
+
+fn video_filter_with_legacy_sdr_tags(
+    filter: Option<String>,
+    pixel_format: Option<&str>,
+) -> Option<String> {
+    if pixel_format != Some("yuv420p") {
+        return filter;
+    }
+    let sdr_filter = "setparams=colorspace=bt709:color_trc=bt709:color_primaries=bt709";
+    Some(match filter {
+        Some(filter) if !filter.is_empty() => format!("{filter},{sdr_filter}"),
+        _ => sdr_filter.to_string(),
+    })
+}
+
+fn h264_bitstream_needs_legacy_sei_strip(codec: &str) -> bool {
+    matches!(codec, "h264" | "avc" | "h264_avc")
 }
 
 /// Maps our caller-facing codec strings to FFmpeg codec names.
