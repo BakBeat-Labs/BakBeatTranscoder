@@ -59,6 +59,9 @@ impl FfmpegAdapter {
         args.extend(["-i".into(), node.input_path.to_string_lossy().into_owned()]);
 
         if p.media_type == MediaType::Video {
+            if let Some(poster_path) = &p.poster_artwork_path {
+                args.extend(["-i".into(), poster_path.to_string_lossy().into_owned()]);
+            }
             args.extend([
                 "-map".into(),
                 "0:v:0".into(),
@@ -66,7 +69,7 @@ impl FfmpegAdapter {
                 "0:a:0?".into(),
             ]);
             if let Some(poster_path) = &p.poster_artwork_path {
-                args.extend(["-i".into(), poster_path.to_string_lossy().into_owned()]);
+                let _ = poster_path;
                 args.extend([
                     "-map".into(),
                     "1:v:0".into(),
@@ -387,6 +390,10 @@ mod tests {
             .map(|w| w[1].as_str())
     }
 
+    fn index_of_window(args: &[String], first: &str, second: &str) -> Option<usize> {
+        args.windows(2).position(|w| w[0] == first && w[1] == second)
+    }
+
     #[test]
     fn audio_transcode_maps_audio_and_optional_cover_art() {
         let adapter = FfmpegAdapter::for_testing(false);
@@ -500,6 +507,9 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|w| w[0] == "-i" && w[1] == "/tmp/poster.jpg"));
+        let poster_input_index = index_of_window(&args, "-i", "/tmp/poster.jpg").unwrap();
+        let first_map_index = args.iter().position(|arg| arg == "-map").unwrap();
+        assert!(poster_input_index < first_map_index);
         assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v:0"));
         assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:a:0?"));
         assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "1:v:0"));
