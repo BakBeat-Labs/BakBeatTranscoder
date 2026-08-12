@@ -5,8 +5,9 @@
 //! The deterministic execution graph — frozen, serialized, hashable machine truth.
 //!
 //! A graph is fully resolved before any I/O begins: every parameter is explicit,
-//! every input is hashed, every output path is determined. The same graph run
-//! against the same input hashes must produce identical outputs.
+//! every input is fingerprinted (size/mtime/probed shape — see
+//! `SourceFingerprint`), every output path is determined. The same graph run
+//! against unchanged inputs must produce identical outputs.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

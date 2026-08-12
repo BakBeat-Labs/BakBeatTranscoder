@@ -83,6 +83,30 @@ jobs:
           }
           Copy-Item $bin.FullName dist\atracdenc.exe
 
+      - name: Extract Microsoft WinUSB build redistributables
+        shell: pwsh
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://go.microsoft.com/fwlink/p/?LinkID=253170" `
+            -OutFile "$env:RUNNER_TEMP\wdfcoinstaller.msi"
+          $process = Start-Process msiexec.exe -Wait -PassThru `
+            -ArgumentList "/a", "$env:RUNNER_TEMP\wdfcoinstaller.msi", `
+              "TARGETDIR=$env:RUNNER_TEMP\wdf-redist", "/qn"
+          if ($process.ExitCode -ne 0) {
+            throw "Microsoft WinUSB redistributable extraction failed with $($process.ExitCode)"
+          }
+          if (-not (Test-Path "$env:RUNNER_TEMP\wdf-redist\Windows Kits\8.0")) {
+            throw "Microsoft WinUSB redistributables were not extracted at the expected path"
+          }
+
+      - name: Build Windows-only NetMD driver helper
+        shell: pwsh
+        run: |
+          & .\.github\scripts\build-netmd-driver.ps1 `
+            -DistDirectory dist `
+            -WorkDirectory "$env:GITHUB_WORKSPACE\build-netmd-libwdi" `
+            -WdkDirectory "$env:RUNNER_TEMP\wdf-redist\Windows Kits\8.0"
+
       - name: Bundle license files
         shell: pwsh
         run: |
