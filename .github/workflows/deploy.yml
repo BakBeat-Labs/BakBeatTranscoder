@@ -287,9 +287,10 @@ jobs:
         run: |
           for binary in dist/bbt dist/ffmpeg dist/ffprobe dist/atracdenc; do
             codesign --force --options runtime \
+              --timestamp \
               --sign "${{ secrets.APPLE_DEVELOPER_IDENTITY }}" \
               "$binary"
-            codesign --verify --verbose "$binary"
+            codesign --verify --strict --verbose=4 "$binary"
             if ! codesign -dv --verbose=4 "$binary" 2>&1 \
               | grep -F "Authority=Developer ID Application:"; then
               echo "$binary was not signed with a Developer ID Application certificate." >&2
@@ -324,6 +325,23 @@ jobs:
           ls -lh dist/
           cd dist
           tar -czf ../${{ matrix.archive }} .
+
+      - name: Verify packaged macOS archive
+        if: matrix.platform == 'macos-arm64'
+        run: |
+          VERIFY_DIR="$RUNNER_TEMP/bbt-bundle-verify"
+          rm -rf "$VERIFY_DIR"
+          mkdir -p "$VERIFY_DIR"
+          tar -xzf "${{ matrix.archive }}" -C "$VERIFY_DIR"
+          for binary in bbt ffmpeg ffprobe atracdenc; do
+            test -x "$VERIFY_DIR/$binary"
+            codesign --verify --strict --verbose=4 "$VERIFY_DIR/$binary"
+            if ! codesign -dv --verbose=4 "$VERIFY_DIR/$binary" 2>&1 \
+              | grep -F "Authority=Developer ID Application:"; then
+              echo "Packaged $binary is not signed with a Developer ID Application certificate." >&2
+              exit 1
+            fi
+          done
 
       # ── Linux: GPG-sign the release archive ─────────────────────────────────
 

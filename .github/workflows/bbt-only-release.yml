@@ -128,9 +128,10 @@ jobs:
         if: env.SIGN_CODE == 'true' && matrix.platform == 'macos-arm64'
         run: |
           codesign --force --options runtime \
+            --timestamp \
             --sign "${{ secrets.APPLE_DEVELOPER_IDENTITY }}" \
             dist/bbt
-          codesign --verify --verbose dist/bbt
+          codesign --verify --strict --verbose=4 dist/bbt
           if ! codesign -dv --verbose=4 dist/bbt 2>&1 \
             | grep -F "Authority=Developer ID Application:"; then
             echo "dist/bbt was not signed with a Developer ID Application certificate." >&2
@@ -156,6 +157,21 @@ jobs:
           ls -lh dist/
           cd dist
           tar -czf "../${{ matrix.archive }}" .
+
+      - name: Verify packaged macOS archive
+        if: matrix.platform == 'macos-arm64'
+        run: |
+          VERIFY_DIR="$RUNNER_TEMP/bbt-only-verify"
+          rm -rf "$VERIFY_DIR"
+          mkdir -p "$VERIFY_DIR"
+          tar -xzf "${{ matrix.archive }}" -C "$VERIFY_DIR"
+          test -x "$VERIFY_DIR/bbt"
+          codesign --verify --strict --verbose=4 "$VERIFY_DIR/bbt"
+          if ! codesign -dv --verbose=4 "$VERIFY_DIR/bbt" 2>&1 \
+            | grep -F "Authority=Developer ID Application:"; then
+            echo "Packaged bbt is not signed with a Developer ID Application certificate." >&2
+            exit 1
+          fi
 
       # ── Linux: GPG-sign the release archive ────────────────────────────────
 
