@@ -59,17 +59,20 @@ impl FfmpegAdapter {
         args.extend(["-i".into(), node.input_path.to_string_lossy().into_owned()]);
 
         if p.media_type == MediaType::Video {
+            args.extend([
+                "-map".into(),
+                "0:v:0".into(),
+                "-map".into(),
+                "0:a:0?".into(),
+            ]);
             if let Some(poster_path) = &p.poster_artwork_path {
                 args.extend(["-i".into(), poster_path.to_string_lossy().into_owned()]);
                 args.extend([
                     "-map".into(),
-                    "0:v:0".into(),
-                    "-map".into(),
-                    "0:a?".into(),
-                    "-map".into(),
                     "1:v:0".into(),
                 ]);
             }
+            args.extend(["-sn".into(), "-dn".into(), "-map_chapters".into(), "-1".into()]);
         }
 
         // Audio-only output: map the audio track plus any embedded cover art
@@ -455,6 +458,11 @@ mod tests {
         let adapter = FfmpegAdapter::for_testing(true);
         let args = adapter.build_args(&gpx_mt861b_video_node()).unwrap();
 
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v:0"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:a:0?"));
+        assert!(args.contains(&"-sn".to_string()));
+        assert!(args.contains(&"-dn".to_string()));
+        assert_eq!(windows_containing(&args, "-map_chapters"), Some("-1"));
         assert_eq!(windows_containing(&args, "-c:v:0"), Some("libxvid"));
         assert_eq!(
             windows_containing(&args, "-filter:v:0"),
@@ -493,8 +501,11 @@ mod tests {
             .windows(2)
             .any(|w| w[0] == "-i" && w[1] == "/tmp/poster.jpg"));
         assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:v:0"));
-        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:a?"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:a:0?"));
         assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "1:v:0"));
+        assert!(args.contains(&"-sn".to_string()));
+        assert!(args.contains(&"-dn".to_string()));
+        assert_eq!(windows_containing(&args, "-map_chapters"), Some("-1"));
         assert_eq!(windows_containing(&args, "-c:v:0"), Some("libx264"));
         assert_eq!(windows_containing(&args, "-profile:v:0"), Some("baseline"));
         assert_eq!(windows_containing(&args, "-level:v:0"), Some("3.0"));
