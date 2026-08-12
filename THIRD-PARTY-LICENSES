@@ -53,6 +53,20 @@ The full text of the LGPL 3.0 is available at:
 In accordance with LGPL section 6, users may obtain the corresponding
 source code from the repository URL above.
 
+1.3  libwdi / BakBeat NetMD driver helper (Windows only)
+─────────────────────────────────────────────────────────
+License: GNU Lesser General Public License version 3.0 or later (LGPL-3.0+)
+Source:  https://github.com/pbatard/libwdi
+Pinned revision: 30df0c0e051b0132c4b9ebed8c054bc8eb3aaaec
+Copyright © 2010–2026 Pete Batard and libwdi contributors
+
+`bakbeat-netmd-driver.exe` is a separately built Windows-only executable based
+on libwdi's LGPL `wdi-simple` example. It is not linked into the proprietary
+BakBeat application or the portable MPL-2.0 `bbt` binary. The Windows archive
+includes `bakbeat-netmd-driver-corresponding-source.zip` with the exact libwdi
+and BakBeat helper source used for the distributed executable, plus the full
+LGPL-3.0 text.
+
 ─────────────────────────────────────────────────────────────────────────────
 PART 2 — RUST CRATE DEPENDENCIES (statically linked into the bbt binary)
 ─────────────────────────────────────────────────────────────────────────────
