@@ -9,6 +9,7 @@ mod error;
 mod executor;
 mod gapless;
 mod graph;
+mod mp4_aac;
 mod planner;
 mod probe;
 mod progress;
@@ -58,7 +59,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Verify(args) => cmd_verify(args, cli.json),
         Commands::Resume(args) => cmd_resume(args, cli.json),
         Commands::Probe(args) => cmd_probe(args, cli.json),
-        Commands::AudiobookProbe(args) => cmd_audiobook_probe(args),
+        Commands::AudiobookProbe(args) => cmd_audiobook_probe(args, cli.json),
         Commands::ExtractArtwork(args) => cmd_extract_artwork(args),
         Commands::Check => cmd_check(cli.json),
         Commands::Hwaccels => cmd_hwaccels(cli.json),
@@ -93,6 +94,7 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
         &args.movflags,
         args.audio_block_size,
         args.audio_only,
+        args.aac_priming,
     )?;
 
     let inputs = expand_inputs(&args.inputs)?;
@@ -270,6 +272,7 @@ fn cmd_plan(args: cli::PlanArgs, json: bool) -> Result<()> {
         &args.movflags,
         args.audio_block_size,
         args.audio_only,
+        args.aac_priming,
     )?;
 
     let inputs = expand_inputs(&args.inputs)?;
@@ -570,6 +573,17 @@ fn cmd_probe(args: cli::ProbeArgs, json: bool) -> Result<()> {
                 "artwork:     {}",
                 if a.has_artwork { "present" } else { "absent" }
             );
+            if let Some(profile) = &a.profile {
+                println!("profile:     {profile}");
+            }
+            match a.priming_samples {
+                Some(n) => println!("priming:     {n} samples"),
+                None => println!("priming:     unknown"),
+            }
+            println!(
+                "chapters:    {}",
+                if a.has_chapters { "present" } else { "absent" }
+            );
             if !a.tags.is_empty() {
                 println!("tags:");
                 for (k, v) in &a.tags {
@@ -625,30 +639,9 @@ fn cmd_probe(args: cli::ProbeArgs, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_audiobook_probe(args: cli::ProbeArgs) -> Result<()> {
-    let ffprobe = binaries::find_ffprobe()
-        .ok_or_else(|| anyhow::anyhow!("ffprobe not found; cannot inspect audiobook container"))?;
-    let output = Command::new(ffprobe)
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=format_name,bit_rate,size,duration:format_tags",
-            "-show_entries",
-            "stream=index,codec_type,codec_name,codec_tag_string,bit_rate,sample_rate,channels,duration,width,height:stream_disposition=attached_pic",
-            "-show_chapters",
-            "-of",
-            "json",
-        ])
-        .arg(&args.file)
-        .output()?;
-
-    print!("{}", String::from_utf8_lossy(&output.stdout));
-    eprint!("{}", String::from_utf8_lossy(&output.stderr));
-    if !output.status.success() {
-        process::exit(output.status.code().unwrap_or(1));
-    }
-
+fn cmd_audiobook_probe(args: cli::ProbeArgs, _json: bool) -> Result<()> {
+    let facts = probe::probe_audiobook_facts(&args.file)?;
+    println!("{}", serde_json::to_string_pretty(&facts)?);
     Ok(())
 }
 
@@ -771,6 +764,7 @@ fn resolve_transcode_spec(
     movflags: &Option<String>,
     audio_block_size: Option<u32>,
     audio_only: bool,
+    aac_priming: Option<u32>,
 ) -> Result<TranscodeSpec> {
     let codec = codec
         .as_deref()
@@ -811,6 +805,7 @@ fn resolve_transcode_spec(
         cbr,
         extension: extension.to_string(),
         preserve_artwork: !audio_only,
+        aac_priming,
     })
 }
 
@@ -818,8 +813,8 @@ fn resolve_transcode_spec(
 /// walked recursively for known media extensions.
 fn expand_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
     const MEDIA_EXTENSIONS: &[&str] = &[
-        "mp3", "flac", "m4a", "aac", "ogg", "opus", "wav", "aiff", "aif", "wma", "ape", "wv",
-        "mka", "mp2", "mp1", "mp4", "m4v", "mov", "avi", "mkv", "webm", "wmv", "mpg", "mpeg",
+        "mp3", "flac", "m4a", "m4b", "aac", "ogg", "opus", "wav", "aiff", "aif", "wma", "ape",
+        "wv", "mka", "mp2", "mp1", "mp4", "m4v", "mov", "avi", "mkv", "webm", "wmv", "mpg", "mpeg",
         "3gp", "3g2",
     ];
 

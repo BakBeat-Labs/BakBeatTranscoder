@@ -109,7 +109,13 @@ impl FfmpegAdapter {
                     "attached_pic".into(),
                 ]);
             } else {
-                args.extend(["-vn".into(), "-sn".into(), "-dn".into()]);
+                args.extend([
+                    "-vn".into(),
+                    "-sn".into(),
+                    "-dn".into(),
+                    "-map_chapters".into(),
+                    "-1".into(),
+                ]);
             }
         }
 
@@ -237,6 +243,11 @@ impl FfmpegAdapter {
                     "attached_pic".into(),
                 ]);
             }
+        } else if audio_uses_ipod_mux(p) {
+            args.extend(["-f".into(), ipod_mux_name(p).into()]);
+            if let Some(movflags) = &p.movflags {
+                args.extend(["-movflags".into(), movflags.clone()]);
+            }
         }
 
         args.push(output_path.to_string_lossy().into_owned());
@@ -293,6 +304,65 @@ impl FfmpegAdapter {
 
         probe_output(&node.output_path)
     }
+
+    fn encode_zero_priming_aac_m4b(
+        &self,
+        node: &ExecutionNode,
+    ) -> Result<ArtifactInfo, AdapterError> {
+        let p = &node.params;
+        if p.audio_codec.eq_ignore_ascii_case("aac_at")
+            || p.extra.values().any(|v| v.eq_ignore_ascii_case("aac_at"))
+        {
+            return Err(AdapterError::EncodeFailed {
+                path: node.output_path.clone(),
+                stderr: "aac_at / AudioToolbox is refused for Shuffle audiobook m4b".to_string(),
+            });
+        }
+        if p.aac_priming.is_some() && p.aac_priming != Some(0) {
+            return Err(AdapterError::EncodeFailed {
+                path: node.output_path.clone(),
+                stderr: format!(
+                    "only --aac-priming 0 is supported (got {:?})",
+                    p.aac_priming
+                ),
+            });
+        }
+
+        let parent = node
+            .output_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let temp_dir = tempfile::Builder::new()
+            .prefix(".bbt-m4b-")
+            .tempdir_in(parent)
+            .map_err(AdapterError::Io)?;
+        let adts_path = temp_dir.path().join("encoded.aac");
+        let stripped_path = temp_dir.path().join("stripped.aac");
+
+        let encode_args = build_zero_priming_adts_args(node, &adts_path);
+        if let Err(first) = self.run_ffmpeg(&encode_args, &adts_path) {
+            let fallback = build_zero_priming_adts_args_without_optional_flags(node, &adts_path);
+            self.run_ffmpeg(&fallback, &adts_path).map_err(|_| first)?;
+        }
+
+        crate::mp4_aac::drop_first_adts_frame_file(&adts_path, &stripped_path).map_err(|e| {
+            AdapterError::EncodeFailed {
+                path: node.output_path.clone(),
+                stderr: e.to_string(),
+            }
+        })?;
+
+        let mux_args = build_zero_priming_ipod_mux_args(node, &stripped_path);
+        self.run_ffmpeg(&mux_args, &node.output_path)?;
+
+        crate::probe::verify_zero_priming_aac_m4b(&node.output_path, p.sample_rate_hz, p.channels)
+            .map_err(|e| AdapterError::EncodeFailed {
+                path: node.output_path.clone(),
+                stderr: e.to_string(),
+            })?;
+
+        probe_output(&node.output_path)
+    }
 }
 
 impl EncoderAdapter for FfmpegAdapter {
@@ -344,6 +414,17 @@ impl EncoderAdapter for FfmpegAdapter {
     fn encode(&self, node: &ExecutionNode) -> Result<ArtifactInfo, AdapterError> {
         ensure_parent(&node.output_path)?;
 
+        if crate::mp4_aac::is_protected_audiobook_path(&node.input_path) {
+            return Err(AdapterError::EncodeFailed {
+                path: node.input_path.clone(),
+                stderr: "refusing FairPlay/Audible DRM source (.m4p/.aax)".to_string(),
+            });
+        }
+
+        if audio_aac_output_needs_zero_priming(node) {
+            return self.encode_zero_priming_aac_m4b(node);
+        }
+
         if video_aac_output_needs_timing_rebuild(node) {
             return self.encode_with_rebuilt_aac_timing(node);
         }
@@ -360,6 +441,119 @@ fn video_aac_output_needs_timing_rebuild(node: &ExecutionNode) -> bool {
     p.media_type == MediaType::Video
         && p.audio_codec == "aac"
         && matches!(p.container.as_str(), "ipod" | "mp4" | "mov")
+}
+
+fn audio_aac_output_needs_zero_priming(node: &ExecutionNode) -> bool {
+    crate::mp4_aac::is_zero_priming_aac_m4b_target(
+        node.params.media_type == MediaType::Audio,
+        &node.params.audio_codec,
+        &node.params.container,
+        &node.params.extension,
+        node.params.aac_priming,
+    )
+}
+
+fn audio_uses_ipod_mux(p: &crate::graph::EncodeParams) -> bool {
+    p.media_type == MediaType::Audio
+        && (p.container.eq_ignore_ascii_case("ipod")
+            || p.container.eq_ignore_ascii_case("m4b")
+            || p.extension.eq_ignore_ascii_case("m4b"))
+}
+
+fn ipod_mux_name(_p: &crate::graph::EncodeParams) -> &'static str {
+    "ipod"
+}
+
+fn build_zero_priming_adts_args(node: &ExecutionNode, adts_path: &Path) -> Vec<String> {
+    let p = &node.params;
+    let mut args = vec![
+        "-y".to_string(),
+        "-i".to_string(),
+        node.input_path.to_string_lossy().into_owned(),
+        "-map".to_string(),
+        "0:a:0".to_string(),
+        "-vn".to_string(),
+        "-sn".to_string(),
+        "-dn".to_string(),
+        "-map_chapters".to_string(),
+        "-1".to_string(),
+        "-map_metadata".to_string(),
+        "-1".to_string(),
+        "-c:a".to_string(),
+        "aac".to_string(),
+        "-profile:a".to_string(),
+        "aac_low".to_string(),
+    ];
+    if let Some(kbps) = p.audio_bitrate_kbps {
+        args.extend(["-b:a".to_string(), format!("{kbps}k")]);
+    }
+    args.extend([
+        "-ar".to_string(),
+        p.sample_rate_hz.to_string(),
+        "-ac".to_string(),
+        p.channels.to_string(),
+        "-aac_pns".to_string(),
+        "0".to_string(),
+        "-aac_is".to_string(),
+        "0".to_string(),
+        "-aac_tns".to_string(),
+        "0".to_string(),
+        "-aac_ms".to_string(),
+        "0".to_string(),
+        "-f".to_string(),
+        "adts".to_string(),
+        adts_path.to_string_lossy().into_owned(),
+    ]);
+    args
+}
+
+fn build_zero_priming_adts_args_without_optional_flags(
+    node: &ExecutionNode,
+    adts_path: &Path,
+) -> Vec<String> {
+    let skip = ["-aac_pns", "-aac_is", "-aac_tns", "-aac_ms"];
+    let args = build_zero_priming_adts_args(node, adts_path);
+    let mut out = Vec::with_capacity(args.len());
+    let mut skip_next = false;
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if skip.contains(&arg.as_str()) {
+            skip_next = true;
+            continue;
+        }
+        out.push(arg);
+    }
+    out
+}
+
+fn build_zero_priming_ipod_mux_args(node: &ExecutionNode, stripped_adts: &Path) -> Vec<String> {
+    let p = &node.params;
+    let mut args = vec![
+        "-y".to_string(),
+        "-i".to_string(),
+        stripped_adts.to_string_lossy().into_owned(),
+        "-map".to_string(),
+        "0:a:0".to_string(),
+        "-c".to_string(),
+        "copy".to_string(),
+        "-vn".to_string(),
+        "-sn".to_string(),
+        "-dn".to_string(),
+        "-map_chapters".to_string(),
+        "-1".to_string(),
+        "-f".to_string(),
+        "ipod".to_string(),
+    ];
+    if let Some(movflags) = &p.movflags {
+        args.extend(["-movflags".to_string(), movflags.clone()]);
+    } else {
+        args.extend(["-movflags".to_string(), "+faststart".to_string()]);
+    }
+    args.push(node.output_path.to_string_lossy().into_owned());
+    args
 }
 
 fn build_rebuild_aac_audio_args(
@@ -498,6 +692,7 @@ mod tests {
                 movflags: None,
                 audio_block_size: None,
                 gapless_trim: None,
+                aac_priming: None,
                 extra: BTreeMap::new(),
             },
         }
@@ -540,6 +735,7 @@ mod tests {
                 movflags: None,
                 audio_block_size: None,
                 gapless_trim: None,
+                aac_priming: None,
                 extra: BTreeMap::new(),
             },
         }
@@ -595,6 +791,7 @@ mod tests {
         assert!(args.contains(&"-vn".to_string()));
         assert!(args.contains(&"-sn".to_string()));
         assert!(args.contains(&"-dn".to_string()));
+        assert_eq!(windows_containing(&args, "-map_chapters"), Some("-1"));
     }
 
     #[test]
@@ -824,6 +1021,61 @@ Encoders:
 ";
         assert!(!encoders_list_has_libxvid(sample));
     }
+
+    #[test]
+    fn shuffle_audiobook_m4b_uses_ipod_mux_and_movflags() {
+        let adapter = FfmpegAdapter::for_testing(false);
+        let mut node = audio_node_with_artwork("aac", "ipod", false);
+        node.output_path = "/tmp/out.m4b".into();
+        node.params.extension = "m4b".to_string();
+        node.params.movflags = Some("+faststart".to_string());
+
+        assert!(audio_aac_output_needs_zero_priming(&node));
+        let args = adapter.build_args(&node).unwrap();
+        assert_eq!(windows_containing(&args, "-f"), Some("ipod"));
+        assert_eq!(windows_containing(&args, "-movflags"), Some("+faststart"));
+        assert_eq!(windows_containing(&args, "-map_chapters"), Some("-1"));
+        assert_ne!(windows_containing(&args, "-codec:a"), Some("aac_at"));
+    }
+
+    #[test]
+    fn zero_priming_adts_args_use_native_aac_lc() {
+        let mut node = audio_node("aac", "ipod");
+        node.output_path = "/tmp/out.m4b".into();
+        node.params.extension = "m4b".to_string();
+        node.params.preserve_artwork = false;
+        node.params.movflags = Some("+faststart".to_string());
+
+        let args = build_zero_priming_adts_args(&node, std::path::Path::new("/tmp/encoded.aac"));
+        assert_eq!(windows_containing(&args, "-c:a"), Some("aac"));
+        assert_eq!(windows_containing(&args, "-profile:a"), Some("aac_low"));
+        assert_eq!(windows_containing(&args, "-b:a"), Some("128k"));
+        assert_eq!(windows_containing(&args, "-ar"), Some("44100"));
+        assert_eq!(windows_containing(&args, "-ac"), Some("2"));
+        assert_eq!(windows_containing(&args, "-f"), Some("adts"));
+        assert!(!args.iter().any(|a| a.contains("aac_at")));
+    }
+
+    #[test]
+    fn zero_priming_mux_copies_into_ipod_m4b() {
+        let mut node = audio_node("aac", "ipod");
+        node.output_path = "/tmp/out.m4b".into();
+        node.params.extension = "m4b".to_string();
+        node.params.movflags = Some("+faststart".to_string());
+
+        let args =
+            build_zero_priming_ipod_mux_args(&node, std::path::Path::new("/tmp/stripped.aac"));
+        assert_eq!(windows_containing(&args, "-c"), Some("copy"));
+        assert_eq!(windows_containing(&args, "-f"), Some("ipod"));
+        assert_eq!(windows_containing(&args, "-movflags"), Some("+faststart"));
+        assert_eq!(args.last().map(String::as_str), Some("/tmp/out.m4b"));
+    }
+
+    #[test]
+    fn codec_to_ffmpeg_refuses_aac_at() {
+        assert!(codec_to_ffmpeg("aac_at").is_err());
+        assert_eq!(codec_to_ffmpeg("aac").unwrap(), "aac");
+    }
 }
 
 /// Query the given FFmpeg binary's `-encoders` output for a `libxvid` line.
@@ -869,6 +1121,9 @@ fn codec_to_ffmpeg(codec: &str) -> Result<&'static str, AdapterError> {
         // Audio
         "mp3" => Ok("libmp3lame"),
         "aac" => Ok("aac"),
+        "aac_at" => Err(AdapterError::UnsupportedCodec(
+            "aac_at is refused (Shuffle audiobook priming)".to_string(),
+        )),
         "flac" => Ok("flac"),
         "vorbis" => Ok("libvorbis"),
         "opus" => Ok("libopus"),

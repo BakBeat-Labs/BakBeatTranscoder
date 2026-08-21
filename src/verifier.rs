@@ -63,6 +63,8 @@ pub struct ArtifactRecord {
     pub width: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priming_samples: Option<u64>,
     pub encode_elapsed_ms: u64,
     pub verified_at: Option<DateTime<Utc>>,
     pub status: ArtifactStatus,

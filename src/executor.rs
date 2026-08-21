@@ -84,6 +84,7 @@ pub fn execute_graph(
                     audio_codec: info.audio_codec,
                     width: info.width,
                     height: info.height,
+                    priming_samples: info.priming_samples,
                     encode_elapsed_ms: elapsed_ms,
                     verified_at: Some(chrono::Utc::now()),
                     status: ArtifactStatus::Success,
@@ -121,6 +122,7 @@ pub fn execute_graph(
                     audio_codec: None,
                     width: None,
                     height: None,
+                    priming_samples: None,
                     encode_elapsed_ms: elapsed_ms,
                     verified_at: None,
                     status: ArtifactStatus::Failed {
@@ -255,6 +257,7 @@ pub fn resume_graph(
                     audio_codec: info.audio_codec,
                     width: info.width,
                     height: info.height,
+                    priming_samples: info.priming_samples,
                     encode_elapsed_ms: elapsed_ms,
                     verified_at: Some(chrono::Utc::now()),
                     status: ArtifactStatus::Success,
@@ -292,6 +295,7 @@ pub fn resume_graph(
                     audio_codec: None,
                     width: None,
                     height: None,
+                    priming_samples: None,
                     encode_elapsed_ms: elapsed_ms,
                     verified_at: None,
                     status: ArtifactStatus::Failed {

@@ -175,6 +175,11 @@ pub struct EncodeParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gapless_trim: Option<GaplessTrim>,
 
+    /// Requested AAC encoder priming. `Some(0)` selects the Shuffle audiobook
+    /// ADTS → drop-first-frame → ipod remux path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aac_priming: Option<u32>,
+
     // ── Adapter-specific overrides ────────────────────────────────────────────
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, String>,

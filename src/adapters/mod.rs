@@ -30,6 +30,8 @@ pub struct ArtifactInfo {
     pub audio_codec: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priming_samples: Option<u64>,
 }
 
 /// Trait implemented by all encoder backends.
@@ -74,13 +76,16 @@ pub(crate) fn probe_output(path: &std::path::Path) -> Result<ArtifactInfo, Adapt
     match crate::probe::probe_media(path) {
         Ok(info) => {
             let duration_ms = info.duration_secs().map(|d| (d * 1000.0).round() as u64);
-            let (video_codec, audio_codec, width, height) = match &info {
-                crate::probe::MediaInfo::Audio(a) => (None, Some(a.codec.clone()), None, None),
+            let (video_codec, audio_codec, width, height, priming_samples) = match &info {
+                crate::probe::MediaInfo::Audio(a) => {
+                    (None, Some(a.codec.clone()), None, None, a.priming_samples)
+                }
                 crate::probe::MediaInfo::Video(v) => (
                     v.video_streams.first().map(|s| s.codec.clone()),
                     v.audio_streams.first().map(|s| s.codec.clone()),
                     v.video_streams.first().map(|s| s.width),
                     v.video_streams.first().map(|s| s.height),
+                    None,
                 ),
             };
 
@@ -93,6 +98,7 @@ pub(crate) fn probe_output(path: &std::path::Path) -> Result<ArtifactInfo, Adapt
                 audio_codec,
                 width,
                 height,
+                priming_samples,
             })
         }
         Err(e) => {
@@ -111,6 +117,7 @@ pub(crate) fn probe_output(path: &std::path::Path) -> Result<ArtifactInfo, Adapt
                 audio_codec: None,
                 width: None,
                 height: None,
+                priming_samples: None,
             })
         }
     }

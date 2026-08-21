@@ -45,4 +45,10 @@ pub struct TranscodeSpec {
     /// BakBeat can set this false for device paths that require audio-only
     /// files, avoiding any direct post-process call to ffmpeg.
     pub preserve_artwork: bool,
+
+    /// Requested AAC encoder priming in PCM samples. `Some(0)` forces the
+    /// zero-priming AAC-LC ipod/m4b path. Inferred for `--container ipod
+    /// --extension m4b` even when this is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aac_priming: Option<u32>,
 }

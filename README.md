@@ -68,6 +68,29 @@ bbt transcode "track.m4a" \
   --json
 ```
 
+Shuffle 1st-generation audiobook (AAC-LC `.m4b`, 44100 Hz stereo, 0 priming):
+
+```bash
+bbt transcode "book.m4b" \
+  --codec aac \
+  --container ipod \
+  --extension m4b \
+  --bitrate 128 \
+  --sample-rate 44100 \
+  --channels 2 \
+  --cbr \
+  --audio-only \
+  --movflags +faststart \
+  --no-skip \
+  --output ./out \
+  --json
+```
+
+`bbt audiobook-probe --json` reports `codec`, `profile`, `sample_rate_hz`,
+`channels`, `bitrate_kbps`, and `priming_samples` so BakBeat can choose copy vs
+create. Native `ffmpeg -c:a aac` straight to `.m4b` is not this path: it leaves
+1024-sample encoder priming, which 1G Shuffle rejects.
+
 ## Commands
 
 ### `bbt transcode`
@@ -99,6 +122,7 @@ Useful flags:
 | `--frame-rate <fps>` | Requested frame rate. Omit to preserve source when available. |
 | `--pixel-format <fmt>` | Adapter pixel format, such as `yuv420p`. |
 | `--audio-only` | Strip artwork/video/subtitle/data side streams from audio outputs. |
+| `--aac-priming 0` | Force zero-priming AAC-LC (inferred for `--container ipod --extension m4b`). |
 | `--no-skip` | Force an encode even if codec/container already match. |
 | `--json` | Emit NDJSON progress events on stdout. |
 

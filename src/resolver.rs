@@ -187,6 +187,7 @@ mod tests {
                 movflags: None,
                 audio_block_size: None,
                 gapless_trim: None,
+                aac_priming: None,
                 extra: BTreeMap::new(),
             },
         }

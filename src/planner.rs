@@ -216,6 +216,7 @@ fn resolve_params(source: &MediaInfo, spec: &TranscodeSpec) -> EncodeParams {
         audio_block_size: spec.audio_block_size,
         preserve_artwork: spec.preserve_artwork,
         gapless_trim,
+        aac_priming: spec.aac_priming,
         extra: BTreeMap::new(),
     }
 }
@@ -291,6 +292,9 @@ mod tests {
             n_frames,
             bitrate_kbps: None,
             has_artwork: false,
+            profile: None,
+            priming_samples: None,
+            has_chapters: false,
             tags,
         })
     }
@@ -360,6 +364,9 @@ mod tests {
             n_frames: Some(11408376),
             bitrate_kbps: None,
             has_artwork: false,
+            profile: None,
+            priming_samples: None,
+            has_chapters: false,
             tags,
         });
         assert!(compute_gapless_trim(&source).is_none());

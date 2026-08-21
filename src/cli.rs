@@ -161,6 +161,11 @@ pub struct TranscodeArgs {
     #[arg(long)]
     pub audio_only: bool,
 
+    /// Requested AAC encoder priming in PCM samples. Pass `0` for Shuffle
+    /// audiobook `.m4b` (ipod mux). Inferred when `--container ipod --extension m4b`.
+    #[arg(long)]
+    pub aac_priming: Option<u32>,
+
     /// Force constant bitrate encoding (default: true for lossy codecs)
     #[arg(long, default_value = "true")]
     pub cbr: bool,
@@ -282,6 +287,11 @@ pub struct PlanArgs {
     /// Emit only the primary audio stream; do not copy cover art or side streams.
     #[arg(long)]
     pub audio_only: bool,
+
+    /// Requested AAC encoder priming in PCM samples. Pass `0` for Shuffle
+    /// audiobook `.m4b` (ipod mux). Inferred when `--container ipod --extension m4b`.
+    #[arg(long)]
+    pub aac_priming: Option<u32>,
 
     #[arg(long, default_value = "true")]
     pub cbr: bool,

@@ -27,6 +27,7 @@ use symphonia::core::meta::{MetadataOptions, StandardTagKey, Value};
 use symphonia::core::probe::Hint;
 
 use crate::binaries;
+use crate::mp4_aac::{self, AudiobookFacts};
 use crate::spec::TranscodeSpec;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -61,6 +62,15 @@ pub struct AudioInfo {
     /// block, MP4 covr / attached_pic, ID3 APIC). Used to decide whether the
     /// transcode graph needs to preserve a video/image stream.
     pub has_artwork: bool,
+    /// AAC profile when known (`LC`, `HE-AAC`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Encoder delay in PCM samples from the MP4 edit list (or equivalent).
+    /// `null` when this file is not ISO-BMFF or priming could not be read —
+    /// BakBeat must not treat `null` as Shuffle-ready.
+    pub priming_samples: Option<u64>,
+    #[serde(default)]
+    pub has_chapters: bool,
     pub tags: BTreeMap<String, String>,
 }
 
@@ -103,8 +113,40 @@ impl MediaInfo {
     /// Used by the planner to skip no-op transcodes.
     pub fn already_matches_spec(&self, spec: &TranscodeSpec) -> bool {
         use crate::graph::MediaType;
+        use crate::mp4_aac::{containers_match_audiobook, is_zero_priming_aac_m4b_target};
         match (self, &spec.media_type) {
             (MediaInfo::Audio(a), MediaType::Audio) => {
+                if is_zero_priming_aac_m4b_target(
+                    true,
+                    &spec.audio_codec,
+                    &spec.container,
+                    &spec.extension,
+                    spec.aac_priming,
+                ) {
+                    let rate_ok = spec
+                        .sample_rate_hz
+                        .map(|sr| a.sample_rate_hz == Some(sr))
+                        .unwrap_or(true);
+                    let ch_ok = spec
+                        .channels
+                        .map(|ch| a.channels == Some(ch))
+                        .unwrap_or(true);
+                    let profile_ok = a
+                        .profile
+                        .as_deref()
+                        .is_some_and(|p| p.eq_ignore_ascii_case("LC"));
+                    let priming_ok = a.priming_samples == Some(0);
+                    return a.codec.eq_ignore_ascii_case(&spec.audio_codec)
+                        && containers_match_audiobook(
+                            &a.container,
+                            &spec.container,
+                            &spec.extension,
+                        )
+                        && rate_ok
+                        && ch_ok
+                        && profile_ok
+                        && priming_ok;
+                }
                 a.codec.eq_ignore_ascii_case(&spec.audio_codec)
                     && a.container.eq_ignore_ascii_case(&spec.container)
             }
@@ -225,8 +267,8 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
         .clone();
 
     let codec = codec_type_to_str(codec_params.codec).to_string();
-    let sample_rate_hz = codec_params.sample_rate;
-    let channels = codec_params.channels.map(|c| c.count() as u8);
+    let mut sample_rate_hz = codec_params.sample_rate;
+    let mut channels = codec_params.channels.map(|c| c.count() as u8);
     let bits_per_sample = codec_params
         .bits_per_sample
         .or(codec_params.bits_per_coded_sample);
@@ -269,6 +311,30 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
         .unwrap_or("unknown")
         .to_lowercase();
 
+    let mut profile = None;
+    let mut priming_samples = None;
+    let mut has_chapters = false;
+    if mp4_aac::is_iso_bmff_audio_ext(&container) {
+        match mp4_aac::inspect_mp4(path) {
+            Ok(mp4) if mp4.parsed => {
+                profile = mp4.profile;
+                priming_samples = Some(mp4.priming_samples.unwrap_or(0));
+                has_chapters = mp4.has_chapters;
+                has_artwork |= mp4.has_artwork;
+                if channels.is_none() {
+                    channels = mp4.channels;
+                }
+                if sample_rate_hz.is_none() {
+                    sample_rate_hz = mp4.sample_rate_hz;
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!(path = ?path, error = %e, "mp4 inspect failed; priming unknown");
+            }
+        }
+    }
+
     Ok(AudioInfo {
         path: path.to_owned(),
         container,
@@ -280,8 +346,94 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
         n_frames,
         bitrate_kbps,
         has_artwork,
+        profile,
+        priming_samples,
+        has_chapters,
         tags,
     })
+}
+
+/// Structured audiobook probe for BakBeat copy-vs-create. Not a raw ffprobe dump.
+pub fn probe_audiobook_facts(path: &Path) -> Result<AudiobookFacts> {
+    if !path.exists() {
+        return Err(anyhow!("file not found: {}", path.display()));
+    }
+    if mp4_aac::is_protected_audiobook_path(path) {
+        return Err(anyhow!(
+            "refusing FairPlay/Audible DRM source: {}",
+            path.display()
+        ));
+    }
+
+    let audio = probe_audio_file(path)?;
+    Ok(AudiobookFacts {
+        codec: audio.codec,
+        profile: audio.profile,
+        sample_rate_hz: audio.sample_rate_hz,
+        channels: audio.channels,
+        bitrate_kbps: audio.bitrate_kbps,
+        priming_samples: audio.priming_samples,
+        has_chapters: Some(audio.has_chapters),
+        has_artwork: Some(audio.has_artwork),
+        container: audio.container,
+    })
+}
+
+/// Fail unless an AAC-LC ipod/m4b artifact matches the requested rate/channels
+/// with zero encoder priming.
+pub fn verify_zero_priming_aac_m4b(path: &Path, sample_rate_hz: u32, channels: u8) -> Result<()> {
+    let facts = probe_audiobook_facts(path)?;
+    if !facts.codec.eq_ignore_ascii_case("aac") {
+        return Err(anyhow!(
+            "shuffle m4b verify: expected AAC, found {}",
+            facts.codec
+        ));
+    }
+    match facts.profile.as_deref() {
+        Some("LC") => {}
+        other => {
+            return Err(anyhow!(
+                "shuffle m4b verify: expected AAC-LC, found profile {other:?}"
+            ));
+        }
+    }
+    if facts.sample_rate_hz != Some(sample_rate_hz) {
+        return Err(anyhow!(
+            "shuffle m4b verify: expected {sample_rate_hz} Hz, found {:?}",
+            facts.sample_rate_hz
+        ));
+    }
+    if facts.channels != Some(channels) {
+        return Err(anyhow!(
+            "shuffle m4b verify: expected {channels} channels, found {:?}",
+            facts.channels
+        ));
+    }
+    match facts.priming_samples {
+        Some(0) => {}
+        Some(n) => {
+            return Err(anyhow!(
+                "shuffle m4b verify: expected 0 priming samples, found {n}"
+            ));
+        }
+        None => {
+            return Err(anyhow!(
+                "shuffle m4b verify: priming_samples unknown; refusing success"
+            ));
+        }
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext != "m4b" && facts.container != "ipod" && facts.container != "m4b" {
+        return Err(anyhow!(
+            "shuffle m4b verify: expected .m4b / ipod, found ext={ext} container={}",
+            facts.container
+        ));
+    }
+    Ok(())
 }
 
 // ── Video probing (ffprobe) ───────────────────────────────────────────────────
@@ -506,5 +658,134 @@ fn codec_type_to_str(codec: CodecType) -> &'static str {
         CODEC_TYPE_PCM_F64BE => "pcm_f64be",
         CODEC_TYPE_NULL => "null",
         _ => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::MediaType;
+    use crate::spec::TranscodeSpec;
+
+    fn shuffle_spec() -> TranscodeSpec {
+        TranscodeSpec {
+            media_type: MediaType::Audio,
+            container: "ipod".into(),
+            extension: "m4b".into(),
+            cbr: true,
+            audio_codec: "aac".into(),
+            audio_bitrate_kbps: Some(128),
+            sample_rate_hz: Some(44100),
+            channels: Some(2),
+            video_codec: None,
+            video_bitrate_kbps: None,
+            width: None,
+            height: None,
+            frame_rate: None,
+            pixel_format: None,
+            video_filter: None,
+            video_profile: None,
+            video_level: None,
+            poster_artwork_path: None,
+            hwaccel: None,
+            movflags: Some("+faststart".into()),
+            audio_block_size: None,
+            preserve_artwork: false,
+            aac_priming: None,
+        }
+    }
+
+    fn audio(
+        container: &str,
+        codec: &str,
+        rate: u32,
+        channels: u8,
+        profile: Option<&str>,
+        priming: Option<u64>,
+    ) -> MediaInfo {
+        MediaInfo::Audio(AudioInfo {
+            path: format!("/tmp/x.{container}").into(),
+            container: container.into(),
+            codec: codec.into(),
+            sample_rate_hz: Some(rate),
+            channels: Some(channels),
+            bits_per_sample: None,
+            duration_secs: Some(1.0),
+            n_frames: None,
+            bitrate_kbps: Some(128),
+            has_artwork: false,
+            profile: profile.map(str::to_string),
+            priming_samples: priming,
+            has_chapters: false,
+            tags: BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn shuffle_skip_requires_lc_44100_stereo_zero_priming() {
+        let spec = shuffle_spec();
+        assert!(audio("m4b", "aac", 44100, 2, Some("LC"), Some(0)).already_matches_spec(&spec));
+        assert!(!audio("m4b", "aac", 22050, 2, Some("LC"), Some(0)).already_matches_spec(&spec));
+        assert!(!audio("m4b", "aac", 44100, 2, Some("LC"), Some(1024)).already_matches_spec(&spec));
+        assert!(!audio("m4b", "aac", 44100, 2, Some("HE-AAC"), Some(0)).already_matches_spec(&spec));
+        assert!(!audio("m4b", "aac", 44100, 2, None, Some(0)).already_matches_spec(&spec));
+        assert!(!audio("m4a", "aac", 44100, 2, Some("LC"), Some(0)).already_matches_spec(&spec));
+    }
+
+    #[test]
+    fn generic_audio_skip_still_uses_codec_and_container() {
+        let spec = TranscodeSpec {
+            container: "mp3".into(),
+            extension: "mp3".into(),
+            audio_codec: "mp3".into(),
+            sample_rate_hz: Some(44100),
+            channels: Some(2),
+            preserve_artwork: true,
+            ..shuffle_spec()
+        };
+        assert!(audio("mp3", "mp3", 22050, 1, None, None).already_matches_spec(&spec));
+        assert!(!audio("mp3", "aac", 44100, 2, None, None).already_matches_spec(&spec));
+    }
+
+    fn have_ffmpeg() -> bool {
+        Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn verify_rejects_native_ffmpeg_aac_priming() {
+        if !have_ffmpeg() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let primed = dir.path().join("primed.m4b");
+        assert!(Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=44100:duration=1",
+                "-ac",
+                "2",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-f",
+                "ipod",
+            ])
+            .arg(&primed)
+            .status()
+            .unwrap()
+            .success());
+        let err = verify_zero_priming_aac_m4b(&primed, 44100, 2).unwrap_err();
+        assert!(
+            err.to_string().contains("priming"),
+            "expected priming failure, got {err}"
+        );
     }
 }
