@@ -318,7 +318,8 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
         match mp4_aac::inspect_mp4(path) {
             Ok(mp4) if mp4.parsed => {
                 profile = mp4.profile;
-                priming_samples = Some(mp4.priming_samples.unwrap_or(0));
+                // Missing elst is unknown, not zero. BakBeat must not copy on null.
+                priming_samples = mp4.priming_samples;
                 has_chapters = mp4.has_chapters;
                 has_artwork |= mp4.has_artwork;
                 if channels.is_none() {

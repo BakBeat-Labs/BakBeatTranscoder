@@ -7,7 +7,8 @@
 //! Used to read encoder priming (`elst` media_time), AAC profile (`esds`),
 //! chapter boxes, and to strip native FFmpeg AAC encoder delay from ADTS.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
@@ -48,21 +49,31 @@ pub fn is_iso_bmff_audio_ext(ext: &str) -> bool {
 
 /// Drop the first complete ADTS AAC frame (native encoder delay = 1024 samples).
 pub fn drop_first_adts_frame(input: &[u8]) -> Result<Vec<u8>> {
-    let Some((frame_len, _)) = adts_frame_at(input, 0) else {
+    let start = find_adts_sync(input).ok_or_else(|| anyhow!("ADTS stream has no sync word"))?;
+    let Some((frame_len, _)) = adts_frame_at(input, start) else {
         return Err(anyhow!("ADTS stream has no complete first frame to drop"));
     };
-    if frame_len >= input.len() {
+    let next = start + frame_len;
+    if next >= input.len() {
         return Err(anyhow!(
             "ADTS stream has only one frame; cannot drop encoder delay"
         ));
     }
-    let rest = &input[frame_len..];
-    if adts_frame_at(rest, 0).is_none() {
+    let rest = &input[next..];
+    if find_adts_sync(rest)
+        .and_then(|off| adts_frame_at(rest, off))
+        .is_none()
+    {
         return Err(anyhow!(
             "ADTS stream has no frames after dropping encoder delay"
         ));
     }
     Ok(rest.to_vec())
+}
+
+fn find_adts_sync(data: &[u8]) -> Option<usize> {
+    data.windows(2)
+        .position(|w| w[0] == 0xFF && w[1] & 0xF0 == 0xF0)
 }
 
 pub fn drop_first_adts_frame_file(src: &Path, dst: &Path) -> Result<()> {
@@ -100,11 +111,47 @@ pub struct Mp4AacInfo {
     pub parsed: bool,
 }
 
+/// Read `moov` (and `moof` if present) without loading `mdat`.
 pub fn inspect_mp4(path: &Path) -> Result<Mp4AacInfo> {
-    let data = fs::read(path)?;
-    Ok(inspect_mp4_bytes(&data))
+    let mut file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let mut info = Mp4AacInfo::default();
+    let mut pos = 0u64;
+    while pos + 8 <= file_len {
+        file.seek(SeekFrom::Start(pos))?;
+        let mut hdr = [0u8; 8];
+        file.read_exact(&mut hdr)?;
+        let size32 = u32::from_be_bytes(hdr[0..4].try_into().unwrap());
+        let mut typ = [0u8; 4];
+        typ.copy_from_slice(&hdr[4..8]);
+        let (header_len, total) = if size32 == 1 {
+            let mut wide = [0u8; 8];
+            file.read_exact(&mut wide)?;
+            (16u64, u64::from_be_bytes(wide))
+        } else if size32 == 0 {
+            (8u64, file_len.saturating_sub(pos))
+        } else {
+            (8u64, u64::from(size32))
+        };
+        if total < header_len || pos.saturating_add(total) > file_len {
+            break;
+        }
+        if &typ == b"moov" || &typ == b"moof" {
+            let payload_len = (total - header_len) as usize;
+            let mut payload = vec![0u8; payload_len];
+            file.read_exact(&mut payload)?;
+            walk_boxes(&payload, &mut info, false);
+            info.parsed = true;
+            if &typ == b"moov" {
+                break;
+            }
+        }
+        pos = pos.saturating_add(total);
+    }
+    Ok(info)
 }
 
+#[allow(dead_code)]
 pub fn inspect_mp4_bytes(data: &[u8]) -> Mp4AacInfo {
     let mut info = Mp4AacInfo::default();
     if data.len() < 8 {
@@ -125,7 +172,11 @@ fn walk_boxes(data: &[u8], info: &mut Mp4AacInfo, in_sound_track: bool) {
                 walk_boxes(payload, info, in_sound_track);
             }
             b"trak" => {
-                let sound = track_is_sound(payload);
+                let handler = find_handler(payload);
+                let sound = handler.as_ref() == Some(b"soun");
+                if matches!(handler.as_ref(), Some(b"text" | b"sbtl")) {
+                    info.has_chapters = true;
+                }
                 walk_boxes(payload, info, sound);
             }
             b"elst" if in_sound_track => {
@@ -145,10 +196,6 @@ fn walk_boxes(data: &[u8], info: &mut Mp4AacInfo, in_sound_track: bool) {
             _ => {}
         }
     }
-}
-
-fn track_is_sound(trak: &[u8]) -> bool {
-    find_handler(trak) == Some(*b"soun")
 }
 
 fn find_handler(data: &[u8]) -> Option<[u8; 4]> {
@@ -371,7 +418,9 @@ pub fn is_zero_priming_aac_m4b_target(
     }
     let ext = extension.to_ascii_lowercase();
     let cont = container.to_ascii_lowercase();
-    ext == "m4b" || cont == "m4b" || cont == "ipod"
+    // ipod muxer is also used for video; only `.m4b` / explicit priming 0
+    // selects the Shuffle audiobook path.
+    ext == "m4b" || cont == "m4b"
 }
 
 pub fn containers_match_audiobook(
@@ -466,6 +515,9 @@ mod tests {
         ));
         assert!(!is_zero_priming_aac_m4b_target(
             true, "mp3", "ipod", "m4b", None
+        ));
+        assert!(!is_zero_priming_aac_m4b_target(
+            true, "aac", "ipod", "m4a", None
         ));
     }
 
