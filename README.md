@@ -91,6 +91,19 @@ bbt transcode "book.m4b" \
 create. Native `ffmpeg -c:a aac` straight to `.m4b` is not this path: it leaves
 1024-sample encoder priming, which 1G Shuffle rejects.
 
+Library import from a folder of chapter files (MP3 or M4A) is a different job:
+merge into one chaptered `.m4b`, then BakBeat catalogs that file. Device
+targets (including Shuffle zero-priming) stay on `bbt transcode`.
+
+```bash
+bbt audiobook-merge "/path/to/Killing Lincoln" \
+  --title "Killing Lincoln" \
+  --artist "Bill O'Reilly" \
+  --bitrate 64 \
+  --output-file "/path/to/Killing Lincoln.m4b" \
+  --json
+```
+
 ## Commands
 
 ### `bbt transcode`
@@ -134,6 +147,19 @@ video probing uses `ffprobe` as a subprocess.
 ```bash
 bbt probe "track.flac" --json
 bbt probe "movie.mp4" --json
+```
+
+### `bbt audiobook-merge`
+
+Takes a folder of `.mp3` / `.m4a` chapter files (recursive), concatenates them
+in natural filename order, and writes one AAC `.m4b` with named chapter
+markers. Chapter titles come from each source file stem.
+
+BakBeat owns title/artist, destination, and whether the user asked to import
+an audiobook. `bbt` only produces the file.
+
+```bash
+bbt audiobook-merge "chapters/" --title "Dune" --artist "Frank Herbert" --output-file "Dune.m4b"
 ```
 
 ### `bbt check`

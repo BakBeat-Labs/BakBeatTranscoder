@@ -118,6 +118,12 @@ pub enum Event {
         /// Nodes actually encoded this run (resume only).
         #[serde(skip_serializing_if = "Option::is_none")]
         re_encoded: Option<usize>,
+        /// Produced artifact path (audiobook merge).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        /// Chapter markers written into the merged audiobook.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        chapters: Option<usize>,
     },
 }
 
@@ -273,6 +279,8 @@ impl Emitter {
                 manifest,
                 carried_forward,
                 re_encoded,
+                output,
+                chapters,
             } => {
                 if let Some(bar) = self.bar.take() {
                     bar.finish_and_clear();
@@ -284,8 +292,13 @@ impl Emitter {
                     }
                     _ => String::new(),
                 };
+                let extra = match (output, chapters) {
+                    (Some(path), Some(n)) => format!("output: {path}\nchapters: {n}\n"),
+                    (Some(path), None) => format!("output: {path}\n"),
+                    _ => format!("manifest: {manifest}\n"),
+                };
                 println!(
-                    "\n{success} succeeded, {failed} failed  ({secs:.1}s)\n{resume_note}manifest: {manifest}"
+                    "\n{success} succeeded, {failed} failed  ({secs:.1}s)\n{resume_note}{extra}"
                 );
             }
         }

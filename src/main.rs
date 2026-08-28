@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 mod adapters;
+mod audiobook_merge;
 mod binaries;
 mod cli;
 mod error;
@@ -60,6 +61,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Resume(args) => cmd_resume(args, cli.json),
         Commands::Probe(args) => cmd_probe(args, cli.json),
         Commands::AudiobookProbe(args) => cmd_audiobook_probe(args, cli.json),
+        Commands::AudiobookMerge(args) => audiobook_merge::run(args, cli.json),
         Commands::ExtractArtwork(args) => cmd_extract_artwork(args),
         Commands::Check => cmd_check(cli.json),
         Commands::Hwaccels => cmd_hwaccels(cli.json),
@@ -183,6 +185,8 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
             manifest: String::new(),
             carried_forward: None,
             re_encoded: None,
+            output: None,
+            chapters: None,
         });
         return Ok(());
     }
@@ -230,6 +234,8 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
         manifest: manifest_path.to_string_lossy().into_owned(),
         carried_forward: None,
         re_encoded: None,
+        output: None,
+        chapters: None,
     });
 
     // In JSON mode, also emit the full manifest as the final object
@@ -387,6 +393,8 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
         manifest: args.manifest.to_string_lossy().into_owned(),
         carried_forward: None,
         re_encoded: None,
+        output: None,
+        chapters: None,
     });
 
     if json {
@@ -518,6 +526,8 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
         manifest: out_path.to_string_lossy().into_owned(),
         carried_forward: Some(manifest.carried_forward_count),
         re_encoded: Some(manifest.success_count),
+        output: None,
+        chapters: None,
     });
 
     if json {

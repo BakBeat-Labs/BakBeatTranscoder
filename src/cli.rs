@@ -54,6 +54,9 @@ pub enum Commands {
     /// Inspect audiobook containers, including chapters and tags.
     AudiobookProbe(ProbeArgs),
 
+    /// Merge a folder of MP3/M4A chapter files into one chaptered `.m4b`.
+    AudiobookMerge(AudiobookMergeArgs),
+
     /// Extract embedded cover artwork from a media file.
     ExtractArtwork(ExtractArtworkArgs),
 
@@ -347,6 +350,44 @@ pub struct ResumeArgs {
 pub struct ProbeArgs {
     /// Media file to probe
     pub file: PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct AudiobookMergeArgs {
+    /// Folder of chapter files (`.mp3` / `.m4a`). Walked recursively.
+    pub input: PathBuf,
+
+    /// Output directory when `--output-file` is omitted (default: ./transcoded)
+    #[arg(short, long, default_value = "transcoded")]
+    pub output: PathBuf,
+
+    /// Exact output `.m4b` path. BakBeat should pass this for library import.
+    #[arg(long)]
+    pub output_file: Option<PathBuf>,
+
+    /// Title metadata. Defaults to the input folder name.
+    #[arg(long)]
+    pub title: Option<String>,
+
+    /// Artist / author metadata.
+    #[arg(long)]
+    pub artist: Option<String>,
+
+    /// Album metadata. Defaults to `--title`.
+    #[arg(long)]
+    pub album: Option<String>,
+
+    /// AAC bitrate in kbps (default: 64).
+    #[arg(long, default_value_t = 64)]
+    pub bitrate: u32,
+
+    /// Output sample rate in Hz. Omit to let the encoder choose.
+    #[arg(long)]
+    pub sample_rate: Option<u32>,
+
+    /// Output channel count. Omit to let the encoder choose.
+    #[arg(long)]
+    pub channels: Option<u8>,
 }
 
 #[derive(Args, Debug)]
