@@ -9,16 +9,54 @@
 //! take priority over throughput. Concurrency will be added as an explicit,
 //! bounded option in a future release.
 
-use std::time::Instant;
+use std::{fs, path::Path, time::Instant};
 
 use anyhow::Result;
 
 use std::collections::HashMap;
 
-use crate::graph::ExecutionGraph;
+use crate::adapters::{ensure_parent, ArtifactInfo, EncoderAdapter};
+use crate::error::AdapterError;
+use crate::graph::{ExecutionGraph, ExecutionNode};
 use crate::progress::{Emitter, Event, Phase};
 use crate::resolver::ResolvedCapabilities;
 use crate::verifier::{artifact_still_valid, ArtifactRecord, ArtifactStatus, TranscodeManifest};
+
+fn encode_and_publish(
+    adapter: &dyn EncoderAdapter,
+    node: &ExecutionNode,
+) -> Result<ArtifactInfo, AdapterError> {
+    let output = &node.output_path;
+    let name = output
+        .file_name()
+        .ok_or_else(|| AdapterError::EncodeFailed {
+            path: output.clone(),
+            stderr: "output path must name a file".into(),
+        })?;
+    if let Ok(existing) = output.canonicalize() {
+        if existing == node.input_path.canonicalize()? {
+            return Err(AdapterError::EncodeFailed {
+                path: output.clone(),
+                stderr: "output path points to the input file".into(),
+            });
+        }
+    }
+    ensure_parent(output)?;
+    let parent = output
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    // Keep the filename for format inference and stage on the destination filesystem.
+    let temp = tempfile::Builder::new()
+        .prefix(".bbt-encode-")
+        .tempdir_in(parent)?;
+    let mut staged = node.clone();
+    staged.output_path = temp.path().join(name);
+    let mut artifact = adapter.encode(&staged)?;
+    fs::rename(&staged.output_path, output)?;
+    artifact.output_path = output.clone();
+    Ok(artifact)
+}
 
 pub fn execute_graph(
     graph: &ExecutionGraph,
@@ -57,7 +95,7 @@ pub fn execute_graph(
         })?;
 
         let encode_start = Instant::now();
-        let result = adapter.encode(node);
+        let result = encode_and_publish(adapter.as_ref(), node);
         let elapsed_ms = encode_start.elapsed().as_millis() as u64;
 
         let record = match result {
@@ -230,7 +268,7 @@ pub fn resume_graph(
         })?;
 
         let encode_start = Instant::now();
-        let result = adapter.encode(node);
+        let result = encode_and_publish(adapter.as_ref(), node);
         let elapsed_ms = encode_start.elapsed().as_millis() as u64;
 
         let record = match result {

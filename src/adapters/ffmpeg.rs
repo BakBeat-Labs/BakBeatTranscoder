@@ -421,6 +421,14 @@ impl EncoderAdapter for FfmpegAdapter {
             });
         }
 
+        let rate = node.params.sample_rate_hz;
+        if node.params.audio_codec == "mp3" && !crate::graph::mp3_sample_rate_supported(rate) {
+            return Err(AdapterError::EncodeFailed {
+                path: node.input_path.clone(),
+                stderr: crate::graph::unsupported_mp3_sample_rate(rate),
+            });
+        }
+
         if audio_aac_output_needs_zero_priming(node) {
             return self.encode_zero_priming_aac_m4b(node);
         }

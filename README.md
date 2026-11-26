@@ -127,7 +127,7 @@ Useful flags:
 | `--container <container>` | Requested output container. Defaults to `--codec`. |
 | `--extension <extension>` | Requested file extension. Defaults to container. |
 | `--bitrate <kbps>` | Requested audio bitrate. |
-| `--sample-rate <hz>` | Requested audio sample rate. Omit to preserve source when available. |
+| `--sample-rate <hz>` | Requested audio sample rate. Omit to preserve the source rate. MP3 requires a supported rate of 48 kHz or lower. |
 | `--channels <count>` | Requested channel count. Omit to preserve source when available. |
 | `--video-codec <codec>` | Requested video codec. Required with `--media video`. |
 | `--video-bitrate <kbps>` | Requested video bitrate. |
@@ -136,7 +136,7 @@ Useful flags:
 | `--pixel-format <fmt>` | Adapter pixel format, such as `yuv420p`. |
 | `--audio-only` | Strip artwork/video/subtitle/data side streams from audio outputs. |
 | `--aac-priming 0` | Force zero-priming AAC-LC (inferred for `--container ipod --extension m4b`). |
-| `--no-skip` | Force an encode even if codec/container already match. |
+| `--no-skip` | Force an encode even if the source already matches the requested spec. |
 | `--json` | Emit NDJSON progress events on stdout. |
 
 ### `bbt probe`

@@ -181,6 +181,7 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
         emitter.emit(Event::Complete {
             success: 0,
             failed: 0,
+            skipped: Some(plan.skipped_count),
             total_elapsed_ms: 0,
             manifest: String::new(),
             carried_forward: None,
@@ -230,6 +231,7 @@ fn cmd_transcode(args: cli::TranscodeArgs, json: bool) -> Result<()> {
     emitter.emit(Event::Complete {
         success: manifest.success_count,
         failed: manifest.failure_count,
+        skipped: None,
         total_elapsed_ms: manifest.total_elapsed_ms,
         manifest: manifest_path.to_string_lossy().into_owned(),
         carried_forward: None,
@@ -389,6 +391,7 @@ fn cmd_execute(args: cli::ExecuteArgs, json: bool) -> Result<()> {
     emitter.emit(progress::Event::Complete {
         success: manifest.success_count,
         failed: manifest.failure_count,
+        skipped: None,
         total_elapsed_ms: manifest.total_elapsed_ms,
         manifest: args.manifest.to_string_lossy().into_owned(),
         carried_forward: None,
@@ -522,6 +525,7 @@ fn cmd_resume(args: cli::ResumeArgs, json: bool) -> Result<()> {
     emitter.emit(Event::Complete {
         success: manifest.success_count,
         failed: manifest.failure_count,
+        skipped: None,
         total_elapsed_ms: manifest.total_elapsed_ms,
         manifest: out_path.to_string_lossy().into_owned(),
         carried_forward: Some(manifest.carried_forward_count),

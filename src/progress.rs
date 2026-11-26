@@ -110,6 +110,8 @@ pub enum Event {
     Complete {
         success: usize,
         failed: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        skipped: Option<usize>,
         total_elapsed_ms: u64,
         manifest: String,
         /// Nodes verified from a previous run and not re-encoded (resume only).
@@ -275,6 +277,7 @@ impl Emitter {
             Event::Complete {
                 success,
                 failed,
+                skipped,
                 total_elapsed_ms,
                 manifest,
                 carried_forward,
@@ -284,6 +287,12 @@ impl Emitter {
             } => {
                 if let Some(bar) = self.bar.take() {
                     bar.finish_and_clear();
+                }
+                if let Some(skipped) = skipped.filter(|_| manifest.is_empty()) {
+                    println!(
+                        "Skipped all {skipped} input(s) because they already match the target."
+                    );
+                    return;
                 }
                 let secs = total_elapsed_ms as f64 / 1000.0;
                 let resume_note = match (carried_forward, re_encoded) {

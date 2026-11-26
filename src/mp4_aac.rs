@@ -109,10 +109,18 @@ pub struct Mp4AacInfo {
     pub has_artwork: bool,
     pub encrypted: bool,
     pub parsed: bool,
+    pub alac: Option<AlacInfo>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AlacInfo {
+    pub sample_rate_hz: Option<u32>,
+    pub bits_per_sample: Option<u32>,
+    pub channels: Option<u8>,
 }
 
 /// Read `moov` (and `moof` if present) without loading `mdat`.
-pub fn inspect_mp4(path: &Path) -> Result<Mp4AacInfo> {
+pub fn inspect_mp4(path: &Path, track_index: u32) -> Result<Mp4AacInfo> {
     let mut file = File::open(path)?;
     let file_len = file.metadata()?.len();
     let mut info = Mp4AacInfo::default();
@@ -140,7 +148,7 @@ pub fn inspect_mp4(path: &Path) -> Result<Mp4AacInfo> {
             let payload_len = (total - header_len) as usize;
             let mut payload = vec![0u8; payload_len];
             file.read_exact(&mut payload)?;
-            walk_boxes(&payload, &mut info, false);
+            walk_boxes(&payload, &mut info, false, track_index);
             info.parsed = true;
             if &typ == b"moov" {
                 break;
@@ -157,19 +165,20 @@ pub fn inspect_mp4_bytes(data: &[u8]) -> Mp4AacInfo {
     if data.len() < 8 {
         return info;
     }
-    walk_boxes(data, &mut info, false);
+    walk_boxes(data, &mut info, false, 0);
     info.parsed = true;
     info
 }
 
-fn walk_boxes(data: &[u8], info: &mut Mp4AacInfo, in_sound_track: bool) {
+fn walk_boxes(data: &[u8], info: &mut Mp4AacInfo, in_sound_track: bool, track_index: u32) {
     let mut offset = 0usize;
+    let mut track = 0;
     while let Some((typ, payload, next)) = next_box(data, offset) {
         offset = next;
         match &typ {
             b"moov" | b"edts" | b"mdia" | b"minf" | b"stbl" | b"udta" | b"moof" | b"meta"
             | b"ilst" => {
-                walk_boxes(payload, info, in_sound_track);
+                walk_boxes(payload, info, in_sound_track, track_index);
             }
             b"trak" => {
                 let handler = find_handler(payload);
@@ -177,7 +186,8 @@ fn walk_boxes(data: &[u8], info: &mut Mp4AacInfo, in_sound_track: bool) {
                 if matches!(handler.as_ref(), Some(b"text" | b"sbtl")) {
                     info.has_chapters = true;
                 }
-                walk_boxes(payload, info, sound);
+                walk_boxes(payload, info, sound && track == track_index, track_index);
+                track += 1;
             }
             b"elst" if in_sound_track => {
                 if let Some(priming) = parse_elst_priming(payload) {
@@ -239,13 +249,83 @@ fn walk_stsd(payload: &[u8], info: &mut Mp4AacInfo, in_sound_track: bool) {
                 if sr > 0 {
                     info.sample_rate_hz = Some(sr);
                 }
-                walk_boxes(&sample_payload[28..], info, true);
+                walk_boxes(&sample_payload[28..], info, true, 0);
             }
+        }
+        if in_sound_track && &typ == b"alac" && info.alac.is_none() {
+            info.alac = alac_sample_entry(sample_payload);
         }
         if &typ == b"mp4v" || &typ == b"avc1" || &typ == b"encv" {
             info.has_artwork = true;
         }
     }
+}
+
+fn alac_sample_entry(payload: &[u8]) -> Option<AlacInfo> {
+    let version = u16::from_be_bytes(payload.get(8..10)?.try_into().ok()?);
+    let (child_offset, sample_rate, bits, channels) = match version {
+        0 | 1 => (
+            if version == 0 { 28 } else { 44 },
+            u32::from_be_bytes(payload.get(24..28)?.try_into().ok()?) >> 16,
+            u32::from(u16::from_be_bytes(payload.get(18..20)?.try_into().ok()?)),
+            u32::from(u16::from_be_bytes(payload.get(16..18)?.try_into().ok()?)),
+        ),
+        2 => (
+            64,
+            f64::from_be_bytes(payload.get(32..40)?.try_into().ok()?) as u32,
+            u32::from_be_bytes(payload.get(48..52)?.try_into().ok()?),
+            u32::from_be_bytes(payload.get(40..44)?.try_into().ok()?),
+        ),
+        _ => return None,
+    };
+    Some(
+        payload
+            .get(child_offset..)
+            .and_then(|children| find_alac_config(children, true))
+            .unwrap_or(AlacInfo {
+                sample_rate_hz: (sample_rate > 0).then_some(sample_rate),
+                bits_per_sample: (bits > 0).then_some(bits),
+                channels: u8::try_from(channels).ok().filter(|&n| n > 0),
+            }),
+    )
+}
+
+fn find_alac_config(children: &[u8], allow_wave: bool) -> Option<AlacInfo> {
+    let mut offset = 0;
+    while let Some((typ, payload, next)) = next_box(children, offset) {
+        offset = next;
+        let config = match &typ {
+            b"alac" => parse_alac_config(payload),
+            b"wave" if allow_wave => find_alac_config(payload, false),
+            _ => None,
+        };
+        if config.is_some() {
+            return config;
+        }
+    }
+    None
+}
+
+fn parse_alac_config(payload: &[u8]) -> Option<AlacInfo> {
+    // ALAC FullBox header followed by the 24-byte ALACSpecificConfig.
+    let config = payload.get(4..28)?;
+    let frame_length = u32::from_be_bytes(config[0..4].try_into().ok()?);
+    let bits = config[5];
+    let channels = config[9];
+    let rate = u32::from_be_bytes(config[20..24].try_into().ok()?);
+    if frame_length == 0
+        || config[4] != 0
+        || !matches!(bits, 16 | 20 | 24 | 32)
+        || !(1..=8).contains(&channels)
+        || !(1..=768_000).contains(&rate)
+    {
+        return None;
+    }
+    Some(AlacInfo {
+        sample_rate_hz: Some(rate),
+        bits_per_sample: Some(u32::from(bits)),
+        channels: Some(channels),
+    })
 }
 
 /// First non-empty edit's `media_time` is encoder priming in media timescale
@@ -386,13 +466,13 @@ fn next_box(data: &[u8], offset: usize) -> Option<([u8; 4], &[u8], usize)> {
             return None;
         }
         let size64 = u64::from_be_bytes(data[offset + 8..offset + 16].try_into().ok()?);
-        (16usize, size64 as usize)
+        (16usize, usize::try_from(size64).ok()?)
     } else if size32 == 0 {
         (8usize, data.len() - offset)
     } else {
         (8usize, size32 as usize)
     };
-    if total < header || offset + total > data.len() {
+    if total < header || total > data.len() - offset {
         return None;
     }
     let payload = &data[offset + header..offset + total];
@@ -446,6 +526,42 @@ pub fn containers_match_audiobook(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alac_cookie_overrides_sample_entry_directly_and_in_wave() {
+        fn atom(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+            let mut atom = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+            atom.extend(kind);
+            atom.extend(payload);
+            atom
+        }
+
+        let mut entry = [0; 28];
+        entry[16..18].copy_from_slice(&2u16.to_be_bytes());
+        entry[18..20].copy_from_slice(&16u16.to_be_bytes());
+        entry[24..28].copy_from_slice(&(44_100u32 << 16).to_be_bytes());
+        let mut cookie = [0; 28];
+        cookie[4..8].copy_from_slice(&4096u32.to_be_bytes());
+        cookie[9] = 24;
+        cookie[13] = 1;
+        cookie[24..28].copy_from_slice(&192_000u32.to_be_bytes());
+
+        let direct = atom(b"alac", &cookie);
+        for child in [direct.clone(), atom(b"wave", &direct)] {
+            let info = alac_sample_entry(&[entry.as_slice(), &child].concat()).unwrap();
+            assert_eq!(info.sample_rate_hz, Some(192_000));
+            assert_eq!(info.bits_per_sample, Some(24));
+            assert_eq!(info.channels, Some(1));
+        }
+
+        cookie[13] = 0; // An invalid channel count makes the cookie unusable.
+        for child in [Vec::new(), atom(b"alac", &cookie)] {
+            let info = alac_sample_entry(&[entry.as_slice(), &child].concat()).unwrap();
+            assert_eq!(info.sample_rate_hz, Some(44_100));
+            assert_eq!(info.bits_per_sample, Some(16));
+            assert_eq!(info.channels, Some(2));
+        }
+    }
 
     fn adts_silence_two_frames() -> Vec<u8> {
         // Minimal syntactically valid ADTS frames (payload need not decode).

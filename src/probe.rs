@@ -116,6 +116,23 @@ impl MediaInfo {
         use crate::mp4_aac::{containers_match_audiobook, is_zero_priming_aac_m4b_target};
         match (self, &spec.media_type) {
             (MediaInfo::Audio(a), MediaType::Audio) => {
+                if !a.codec.eq_ignore_ascii_case(&spec.audio_codec)
+                    || spec
+                        .sample_rate_hz
+                        .is_some_and(|rate| a.sample_rate_hz != Some(rate))
+                    || spec
+                        .channels
+                        .is_some_and(|channels| a.channels != Some(channels))
+                    || spec
+                        .audio_bitrate_kbps
+                        .is_some_and(|rate| a.bitrate_kbps != Some(rate))
+                    || (spec.audio_bitrate_kbps.is_some() && requires_unverified_cbr(spec))
+                    || spec.audio_block_size.is_some()
+                    || spec.movflags.is_some()
+                    || (a.has_artwork && !spec.preserve_artwork)
+                {
+                    return false;
+                }
                 if is_zero_priming_aac_m4b_target(
                     true,
                     &spec.audio_codec,
@@ -123,51 +140,72 @@ impl MediaInfo {
                     &spec.extension,
                     spec.aac_priming,
                 ) {
-                    let rate_ok = spec
-                        .sample_rate_hz
-                        .map(|sr| a.sample_rate_hz == Some(sr))
-                        .unwrap_or(true);
-                    let ch_ok = spec
-                        .channels
-                        .map(|ch| a.channels == Some(ch))
-                        .unwrap_or(true);
                     let profile_ok = a
                         .profile
                         .as_deref()
                         .is_some_and(|p| p.eq_ignore_ascii_case("LC"));
                     let priming_ok = a.priming_samples == Some(0);
-                    return a.codec.eq_ignore_ascii_case(&spec.audio_codec)
+                    return a.container.eq_ignore_ascii_case(&spec.extension)
                         && containers_match_audiobook(
                             &a.container,
                             &spec.container,
                             &spec.extension,
                         )
-                        && rate_ok
-                        && ch_ok
                         && profile_ok
                         && priming_ok;
                 }
-                a.codec.eq_ignore_ascii_case(&spec.audio_codec)
-                    && a.container.eq_ignore_ascii_case(&spec.container)
+                a.container.eq_ignore_ascii_case(&spec.container)
+                    && a.container.eq_ignore_ascii_case(&spec.extension)
+                    && spec.aac_priming.map_or(true, |samples| {
+                        a.priming_samples == Some(u64::from(samples))
+                    })
             }
             (MediaInfo::Video(v), MediaType::Video) => {
-                let video_ok = spec
-                    .video_codec
-                    .as_deref()
-                    .map(|vc| {
-                        v.video_streams
-                            .first()
-                            .map(|s| s.codec.eq_ignore_ascii_case(vc))
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(true);
-                let audio_ok = v
-                    .audio_streams
-                    .first()
-                    .map(|s| s.codec.eq_ignore_ascii_case(&spec.audio_codec))
-                    .unwrap_or(false);
-                let container_ok = v.container.eq_ignore_ascii_case(&spec.container);
-                video_ok && audio_ok && container_ok
+                let Some(audio) = v.audio_streams.first() else {
+                    return false;
+                };
+                let Some(video) = v.video_streams.first() else {
+                    return false;
+                };
+                v.container.eq_ignore_ascii_case(&spec.container)
+                    && v.path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case(&spec.extension))
+                    && audio.codec.eq_ignore_ascii_case(&spec.audio_codec)
+                    && spec
+                        .sample_rate_hz
+                        .map_or(true, |rate| audio.sample_rate_hz == Some(rate))
+                    && spec
+                        .channels
+                        .map_or(true, |channels| audio.channels == Some(channels))
+                    && spec
+                        .audio_bitrate_kbps
+                        .map_or(true, |rate| audio.bitrate_kbps == Some(rate))
+                    && !(spec.audio_bitrate_kbps.is_some() && requires_unverified_cbr(spec))
+                    && spec
+                        .video_codec
+                        .as_deref()
+                        .map_or(true, |codec| video.codec.eq_ignore_ascii_case(codec))
+                    && spec
+                        .video_bitrate_kbps
+                        .map_or(true, |rate| video.bitrate_kbps == Some(rate))
+                    && spec.width.map_or(true, |width| video.width == width)
+                    && spec.height.map_or(true, |height| video.height == height)
+                    && spec
+                        .frame_rate
+                        .map_or(true, |rate| video.frame_rate == Some(rate))
+                    && spec
+                        .pixel_format
+                        .as_deref()
+                        .map_or(true, |format| video.pixel_format.as_deref() == Some(format))
+                    && spec.video_filter.is_none()
+                    && spec.video_profile.is_none()
+                    && spec.video_level.is_none()
+                    && spec.poster_artwork_path.is_none()
+                    && spec.movflags.is_none()
+                    && spec.audio_block_size.is_none()
+                    && spec.aac_priming.is_none()
             }
             // Media type mismatch — never a pass-through
             _ => false,
@@ -218,6 +256,12 @@ impl MediaInfo {
     }
 }
 
+fn requires_unverified_cbr(spec: &TranscodeSpec) -> bool {
+    // The probe only reports average bitrate. These encoders also apply
+    // CBR-specific options when a bitrate is requested.
+    spec.cbr && matches!(spec.audio_codec.as_str(), "mp3" | "vorbis" | "opus")
+}
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Probe any media file, routing to Symphonia (audio) or ffprobe (video).
@@ -259,26 +303,24 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
         .with_context(|| format!("probing {}", path.display()))?;
 
     // Clone codec params before taking mutable borrow for metadata
-    let codec_params = probed
+    let track = probed
         .format
         .default_track()
-        .ok_or_else(|| anyhow!("no audio track found in {}", path.display()))?
-        .codec_params
-        .clone();
+        .ok_or_else(|| anyhow!("no audio track found in {}", path.display()))?;
+    let track_index = track.id;
+    let codec_params = track.codec_params.clone();
 
-    let codec = codec_type_to_str(codec_params.codec).to_string();
+    let mut codec = codec_type_to_str(codec_params.codec);
     let mut sample_rate_hz = codec_params.sample_rate;
     let mut channels = codec_params.channels.map(|c| c.count() as u8);
-    let bits_per_sample = codec_params
+    let mut bits_per_sample = codec_params
         .bits_per_sample
         .or(codec_params.bits_per_coded_sample);
-    let n_frames = codec_params.n_frames;
-    let duration_secs = n_frames
+    let mut n_frames = codec_params.n_frames;
+    let mut duration_secs = n_frames
         .zip(codec_params.sample_rate)
+        .filter(|&(_, rate)| rate > 0)
         .map(|(frames, rate)| frames as f64 / rate as f64);
-    let bitrate_kbps = duration_secs
-        .filter(|&d| d > 0.0)
-        .map(|d| ((file_size as f64 * 8.0) / d / 1000.0) as u32);
 
     let mut has_artwork = false;
     let tags = {
@@ -315,18 +357,22 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
     let mut priming_samples = None;
     let mut has_chapters = false;
     if mp4_aac::is_iso_bmff_audio_ext(&container) {
-        match mp4_aac::inspect_mp4(path) {
+        match mp4_aac::inspect_mp4(path, track_index) {
             Ok(mp4) if mp4.parsed => {
                 profile = mp4.profile;
                 // Missing elst is unknown, not zero. BakBeat must not copy on null.
                 priming_samples = mp4.priming_samples;
                 has_chapters = mp4.has_chapters;
                 has_artwork |= mp4.has_artwork;
-                if channels.is_none() {
-                    channels = mp4.channels;
-                }
-                if sample_rate_hz.is_none() {
-                    sample_rate_hz = mp4.sample_rate_hz;
+                if let Some(alac) = mp4.alac {
+                    // Symphonia may not identify ALAC when the cookie is in a wave box.
+                    codec = "alac";
+                    sample_rate_hz = alac.sample_rate_hz;
+                    bits_per_sample = alac.bits_per_sample;
+                    channels = alac.channels;
+                } else {
+                    channels = channels.or(mp4.channels);
+                    sample_rate_hz = sample_rate_hz.or(mp4.sample_rate_hz);
                 }
             }
             Ok(_) => {}
@@ -336,10 +382,27 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo> {
         }
     }
 
+    if codec == "alac" {
+        // For MP4, Symphonia's n_frames is mdhd duration in media ticks.
+        let timing = n_frames.zip(codec_params.time_base);
+        duration_secs = timing
+            .map(|(ticks, base)| ticks as f64 * f64::from(base.numer) / f64::from(base.denom));
+        n_frames = timing
+            .zip(sample_rate_hz)
+            .and_then(|((ticks, base), rate)| {
+                let samples = u128::from(ticks) * u128::from(base.numer) * u128::from(rate);
+                let scale = u128::from(base.denom);
+                u64::try_from((samples + scale / 2) / scale).ok()
+            });
+    }
+    let bitrate_kbps = duration_secs
+        .filter(|&d| d > 0.0)
+        .map(|d| ((file_size as f64 * 8.0) / d / 1000.0) as u32);
+
     Ok(AudioInfo {
         path: path.to_owned(),
         container,
-        codec,
+        codec: codec.to_owned(),
         sample_rate_hz,
         channels,
         bits_per_sample,
@@ -689,7 +752,7 @@ mod tests {
             video_level: None,
             poster_artwork_path: None,
             hwaccel: None,
-            movflags: Some("+faststart".into()),
+            movflags: None,
             audio_block_size: None,
             preserve_artwork: false,
             aac_priming: None,
@@ -734,18 +797,26 @@ mod tests {
     }
 
     #[test]
-    fn generic_audio_skip_still_uses_codec_and_container() {
+    fn generic_audio_skip_requires_requested_rate_channels_and_bitrate() {
         let spec = TranscodeSpec {
             container: "mp3".into(),
             extension: "mp3".into(),
             audio_codec: "mp3".into(),
             sample_rate_hz: Some(44100),
             channels: Some(2),
+            cbr: false,
             preserve_artwork: true,
             ..shuffle_spec()
         };
-        assert!(audio("mp3", "mp3", 22050, 1, None, None).already_matches_spec(&spec));
+        assert!(audio("mp3", "mp3", 44100, 2, None, None).already_matches_spec(&spec));
+        assert!(!audio("mp3", "mp3", 22050, 2, None, None).already_matches_spec(&spec));
+        assert!(!audio("mp3", "mp3", 44100, 1, None, None).already_matches_spec(&spec));
         assert!(!audio("mp3", "aac", 44100, 2, None, None).already_matches_spec(&spec));
+        let different_bitrate = TranscodeSpec {
+            audio_bitrate_kbps: Some(96),
+            ..spec
+        };
+        assert!(!audio("mp3", "mp3", 44100, 2, None, None).already_matches_spec(&different_bitrate));
     }
 
     fn have_ffmpeg() -> bool {

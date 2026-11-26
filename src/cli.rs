@@ -100,7 +100,7 @@ pub struct TranscodeArgs {
     #[arg(long)]
     pub bitrate: Option<u32>,
 
-    /// Output sample rate in Hz (default: preserve source)
+    /// Output sample rate in Hz (default: preserve source; MP3 requires a supported rate)
     #[arg(long)]
     pub sample_rate: Option<u32>,
 
@@ -194,12 +194,7 @@ pub struct TranscodeArgs {
     #[arg(long)]
     pub stop_on_error: bool,
 
-    /// Disable the "already in target format" skip check: always encode every
-    /// input to the requested spec, or fail. Use this when you (the caller)
-    /// have already decided an encode is required — e.g. re-rating an MP3 to
-    /// a lower bitrate, where source and target codec match but bitrate does
-    /// not. Without this flag, bbt treats matching codec+container as "already
-    /// satisfies" and skips the file, which is wrong for same-codec re-rates.
+    /// Force an encode even if the source already matches the requested spec.
     #[arg(long)]
     pub no_skip: bool,
 }

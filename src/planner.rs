@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
@@ -82,7 +82,8 @@ pub fn build_plan(
             resolve_output_path(input_path, source_root, output_dir, &spec.extension)
         });
 
-        let params = resolve_params(&source_info, spec);
+        let params = resolve_params(&source_info, spec)
+            .with_context(|| format!("planning {}", input_path.display()))?;
         let fingerprint = fingerprint_source(input_path, &source_info)?;
 
         jobs.push(PlannedJob {
@@ -159,15 +160,44 @@ fn resolve_output_path(
 /// Resolve spec `Option` fields against probed source info.
 /// Every field in `EncodeParams` is explicit after this — no Nones where a
 /// concrete value is needed for deterministic encoding.
-fn resolve_params(source: &MediaInfo, spec: &TranscodeSpec) -> EncodeParams {
+fn resolve_params(source: &MediaInfo, spec: &TranscodeSpec) -> Result<EncodeParams> {
     // Pull source audio params
-    let (src_sample_rate, src_channels) = match source {
-        MediaInfo::Audio(a) => (a.sample_rate_hz, a.channels),
+    let (src_sample_rate, src_channels, has_audio) = match source {
+        MediaInfo::Audio(a) => (a.sample_rate_hz, a.channels, true),
         MediaInfo::Video(v) => {
             let a = v.audio_streams.first();
-            (a.and_then(|s| s.sample_rate_hz), a.and_then(|s| s.channels))
+            (
+                a.and_then(|s| s.sample_rate_hz),
+                a.and_then(|s| s.channels),
+                a.is_some(),
+            )
         }
     };
+
+    if spec.sample_rate_hz == Some(0) {
+        anyhow::bail!("--sample-rate must be greater than zero");
+    }
+    let sample_rate_hz = match spec
+        .sample_rate_hz
+        .or(src_sample_rate.filter(|&rate| rate > 0))
+    {
+        Some(rate) => rate,
+        None if has_audio
+            && (matches!(spec.audio_codec.as_str(), "flac" | "alac" | "wav")
+                || spec.audio_codec.starts_with("pcm_")) =>
+        {
+            anyhow::bail!(
+                "source sample rate is unknown; specify --sample-rate for lossless output"
+            );
+        }
+        None => 44100,
+    };
+    if spec.audio_codec == "mp3" && !crate::graph::mp3_sample_rate_supported(sample_rate_hz) {
+        anyhow::bail!(
+            "{}",
+            crate::graph::unsupported_mp3_sample_rate(sample_rate_hz)
+        );
+    }
 
     // Pull source video params (for "preserve source" semantics when the spec leaves them None)
     let (src_width, src_height, src_frame_rate) = match source {
@@ -192,14 +222,14 @@ fn resolve_params(source: &MediaInfo, spec: &TranscodeSpec) -> EncodeParams {
         );
     }
 
-    EncodeParams {
+    Ok(EncodeParams {
         media_type: spec.media_type.clone(),
         container: spec.container.clone(),
         extension: spec.extension.clone(),
         cbr: spec.cbr,
         audio_codec: spec.audio_codec.clone(),
         audio_bitrate_kbps: spec.audio_bitrate_kbps,
-        sample_rate_hz: spec.sample_rate_hz.or(src_sample_rate).unwrap_or(44100),
+        sample_rate_hz,
         channels: spec.channels.or(src_channels).unwrap_or(2),
         video_codec: spec.video_codec.clone(),
         video_bitrate_kbps: spec.video_bitrate_kbps,
@@ -218,7 +248,7 @@ fn resolve_params(source: &MediaInfo, spec: &TranscodeSpec) -> EncodeParams {
         gapless_trim,
         aac_priming: spec.aac_priming,
         extra: BTreeMap::new(),
-    }
+    })
 }
 
 /// Symphonia lowercases the full iTunes atom domain key.

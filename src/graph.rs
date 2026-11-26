@@ -185,6 +185,20 @@ pub struct EncodeParams {
     pub extra: BTreeMap<String, String>,
 }
 
+pub(crate) fn mp3_sample_rate_supported(rate: u32) -> bool {
+    matches!(
+        rate,
+        8000 | 11025 | 12000 | 16000 | 22050 | 24000 | 32000 | 44100 | 48000
+    )
+}
+
+pub(crate) fn unsupported_mp3_sample_rate(rate: u32) -> String {
+    format!(
+        "MP3 cannot encode at {rate} Hz. Set --sample-rate to one of 8000, 11025, 12000, \
+         16000, 22050, 24000, 32000, 44100, or 48000 Hz."
+    )
+}
+
 fn default_preserve_artwork() -> bool {
     true
 }

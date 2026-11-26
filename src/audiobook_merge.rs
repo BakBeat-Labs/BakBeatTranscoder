@@ -175,6 +175,7 @@ pub fn run(args: AudiobookMergeArgs, json: bool) -> Result<()> {
     emitter.emit(Event::Complete {
         success: 1,
         failed: 0,
+        skipped: None,
         total_elapsed_ms: batch_start.elapsed().as_millis() as u64,
         manifest: String::new(),
         carried_forward: None,
